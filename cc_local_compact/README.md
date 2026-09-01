@@ -56,7 +56,7 @@ config.py                  environment-variable resolution
 
 - No `PreCompact`/`PostCompact` hook dispatch (a later phase).
 - No precompute cache (no live session to speculate against).
-- `loop.py`'s reactive backoff falls back to a self-estimated token gap when the backend's error response isn't structured the way Anthropic's own API's is -- unverified against the real backend at implementation time, since it was offline. See `loop.py`'s module docstring.
+- Overflow detection doesn't use Anthropic's own error shape (`actualTokens`/`limitTokens`) as the primary path -- confirmed against the live backend (llama-swap on titan:8080) that it emits its own `{"type": "exceed_context_size_error", "n_prompt_tokens", "n_ctx"}` shape instead, which `client.py`'s `_classify_error` now parses first. See `loop.py`'s module docstring.
 
 ## See also
 

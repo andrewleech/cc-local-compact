@@ -106,17 +106,38 @@ def _classify_error(error: anthropic.APIStatusError) -> AttemptResult:
     """Ports Eb (prompt-too-long detection) / LD (token-overage
     extraction) / j9 (media-too-large detection) / tR (error text
     extraction). The real app reads structured actualTokens/limitTokens
-    fields Anthropic's own API returns on a context-overflow error; whether
-    llama-swap's Anthropic-compatible adapter emits the same shape is
-    unverified (backend unreachable at implementation time). The media-
-    too-large check here is a keyword heuristic on the error message, since
-    the source's own detector (NZt) wasn't resolved during reverse
-    engineering -- see loop.py for the self-estimated-gap fallback this
-    feeds into."""
+    fields Anthropic's own API returns on a context-overflow error.
+
+    CONFIRMED against the live backend (llama-swap fronting llama.cpp on
+    titan:8080, 2026-09-01): it does NOT emit Anthropic's shape at all. A
+    genuine overflow comes back as HTTP 400 with:
+        {"error": {"code": 400, "message": "request (N tokens) exceeds
+         the available context size (M tokens), try increasing it",
+         "type": "exceed_context_size_error",
+         "n_prompt_tokens": N, "n_ctx": M}}
+    This is checked FIRST, ahead of the Anthropic-shaped check (kept as a
+    fallback in case a future backend or engine swap emits that shape
+    instead). Because this gives an exact prompt-token count and context
+    limit straight from the server, the resulting token_gap is a precise
+    value, not an estimate -- more precise than loop.py's self-estimated-
+    gap fallback, which now only matters if a backend emits neither shape.
+
+    The media-too-large check here is a keyword heuristic on the error
+    message, since the source's own detector (NZt) wasn't resolved during
+    reverse engineering, and no real media-too-large error has been
+    observed against this backend to confirm its shape."""
     body = getattr(error, "body", None) or {}
     err = body.get("error") if isinstance(body, dict) else None
     message_text = (err or {}).get("message") if isinstance(err, dict) else None
     message_text = message_text or str(error)
+
+    if isinstance(err, dict) and err.get("type") == "exceed_context_size_error":
+        n_prompt_tokens = err.get("n_prompt_tokens")
+        n_ctx = err.get("n_ctx")
+        token_gap = None
+        if isinstance(n_prompt_tokens, int) and isinstance(n_ctx, int) and n_prompt_tokens > n_ctx:
+            token_gap = n_prompt_tokens - n_ctx
+        return AttemptResult(ok=False, reason="prompt_too_long", token_gap=token_gap, detail=message_text)
 
     if message_text.startswith(PROMPT_TOO_LONG_PREFIX):
         token_gap = None
@@ -146,13 +167,34 @@ def summarize_group(
     model input is the group's own messages followed by one trailing
     synthetic user turn carrying the summarization instructions -- the
     model literally continues the conversation, with no separate system
-    prompt and no tools offered."""
+    prompt and no tools offered.
+
+    Native reasoning is explicitly disabled for this call. CONFIRMED
+    against the live backend: qwen3.8-27b has reasoning enabled by
+    default, emitting a hidden `thinking` content block that counts
+    against max_tokens even for a trivial response (27 output tokens for
+    "2+2=4"), and this module's own prompt already asks the model to
+    externalize its reasoning as visible <analysis> text -- a second,
+    hidden reasoning channel is pure budget waste for this task, not a
+    quality benefit, and was a real contributor to the truncation bug
+    documented in response.py. Anthropic's own `thinking` param and
+    `reasoning_effort=low/none` were both tried and silently ignored by
+    this backend; only `extra_body.chat_template_kwargs.enable_thinking`
+    (a llama.cpp/Jinja chat-template mechanism, not an Anthropic API
+    parameter) actually suppressed it, confirmed by content blocks
+    dropping from ['thinking','text'] to just ['text']. Harmless to send
+    for models without this template hook (e.g. gemma-4-12b, which has
+    reasoning off by default already) -- an unrecognized template kwarg is
+    expected to be ignored, not to error."""
     working_group = strip_media(group) if strip_media_flag else group
     messages = _to_api_messages(working_group)
     messages.append({"role": "user", "content": prompts.build_prompt(custom_instructions)})
 
     try:
-        response = client.messages.create(model=model, max_tokens=max_tokens, messages=messages)
+        response = client.messages.create(
+            model=model, max_tokens=max_tokens, messages=messages,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
     except anthropic.APIStatusError as error:
         return _classify_error(error)
     except anthropic.APIError as error:

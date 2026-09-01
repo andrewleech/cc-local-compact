@@ -13,8 +13,31 @@ import os
 DEFAULT_BASE_URL = "http://titan:8080"
 DEFAULT_MODEL = "qwen3.8-27b"
 DEFAULT_API_KEY = "local"
-DEFAULT_CONTEXT_BUDGET = 32000
-DEFAULT_RESPONSE_MAX_TOKENS = 4096
+DEFAULT_CONTEXT_BUDGET = 48000
+"""Deliberately well under either backend model's real context window
+tested so far (qwen3.8-27b: 262144; gemma-4-12b/gemma-4-e4b: 64k) -- this
+sizes one summarization batch, a working-set choice, not a claim about
+what the model can hold. Override per model/host via
+CC_LOCAL_COMPACT_CONTEXT_BUDGET if a model's real window is smaller."""
+
+RESPONSE_TOKENS_FRACTION = 0.3
+RESPONSE_TOKENS_FLOOR = 8192
+"""Claude Code's own /compact call (NBn -> rw) passes no maxOutputTokens
+at all -- it just uses the model's normal ceiling for an ordinary turn,
+not a small artificial cap. The Anthropic Messages API requires an
+explicit max_tokens, so this can't literally be "unconstrained," but it
+should not be a small constant independent of context_budget either: a
+fixed 4096 was observed truncating a real qwen3.8-27b summary mid-sentence
+on a large transcript (no closing tag reached at all), and tokens.py's
+chars/4 heuristic underestimates code-heavy content, so a tight estimate-
+matched value isn't safe either. Scaling as a fraction of context_budget
+(floored, so a small context_budget doesn't starve the response entirely)
+keeps this from becoming the tightest constraint in the pipeline
+regardless of what context_budget is configured."""
+
+
+def _default_response_max_tokens(context_budget: int) -> int:
+    return max(RESPONSE_TOKENS_FLOOR, round(context_budget * RESPONSE_TOKENS_FRACTION))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,6 +58,14 @@ def _first(*names: str, default: str) -> str:
 
 
 def load_config() -> Config:
+    context_budget = int(
+        os.environ.get("CC_LOCAL_COMPACT_CONTEXT_BUDGET", DEFAULT_CONTEXT_BUDGET)
+    )
+    response_max_tokens_env = os.environ.get("CC_LOCAL_COMPACT_RESPONSE_MAX_TOKENS")
+    response_max_tokens = (
+        int(response_max_tokens_env) if response_max_tokens_env
+        else _default_response_max_tokens(context_budget)
+    )
     return Config(
         base_url=_first(
             "CC_LOCAL_COMPACT_BASE_URL", "CLAUDE_NET_PROXY_LOCAL_URL",
@@ -48,12 +79,6 @@ def load_config() -> Config:
             "CC_LOCAL_COMPACT_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             default=DEFAULT_API_KEY,
         ),
-        context_budget=int(
-            os.environ.get("CC_LOCAL_COMPACT_CONTEXT_BUDGET", DEFAULT_CONTEXT_BUDGET)
-        ),
-        response_max_tokens=int(
-            os.environ.get(
-                "CC_LOCAL_COMPACT_RESPONSE_MAX_TOKENS", DEFAULT_RESPONSE_MAX_TOKENS,
-            )
-        ),
+        context_budget=context_budget,
+        response_max_tokens=response_max_tokens,
     )

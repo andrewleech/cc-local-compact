@@ -15,16 +15,17 @@ discovers Claude's much larger limit reactively via live API errors:
 - The reactive backoff is kept as a correctness safety net for when the
   chars/4 estimate is wrong.
 - DEVIATION FROM SOURCE: the real app trusts Anthropic's own structured
-  actualTokens/limitTokens error fields to size the backoff step (see
-  client.py's _classify_error). Whether the local backend emits that same
-  structured shape on overflow is unverified (backend unreachable during
-  implementation -- see docs/compact-architecture.md). When client.py can't
-  parse a structured token_gap, this module falls back to a self-computed
-  gap (this module's own chars/4 estimate of the request just sent, minus
-  the usable budget) rather than dropping straight to the dumb step:1 the
-  source uses in that case -- this keeps the backoff gap-guided even
-  against an opaque backend error. Re-verify which path actually fires once
-  the backend is reachable (see tests/test_e2e_live_backend.py).
+  actualTokens/limitTokens error fields to size the backoff step. CONFIRMED
+  against the live backend (llama-swap fronting llama.cpp on titan:8080,
+  2026-09-01): it does not emit that shape at all -- it emits its own
+  {"type": "exceed_context_size_error", "n_prompt_tokens", "n_ctx"} shape,
+  which client.py's _classify_error now parses first, ahead of the
+  Anthropic-shaped check. That gives an exact token_gap straight from the
+  server on every real overflow observed so far, so this module's self-
+  computed gap fallback (this module's own chars/4 estimate of the request
+  just sent, minus the usable budget, rather than the source's dumb
+  step:1) has not actually been exercised against this backend -- it
+  remains in place only for a backend that emits neither known shape.
 """
 
 import dataclasses
@@ -37,9 +38,21 @@ from .client import AttemptResult
 @dataclasses.dataclass(frozen=True)
 class LoopConfig:
     context_budget: int
-    response_max_tokens: int = 4096
+    response_max_tokens: int | None = None
+    """Defaults to config._default_response_max_tokens(context_budget) if
+    not given -- a fraction of context_budget, floored, rather than one
+    small fixed constant. See config.py's RESPONSE_TOKENS_FRACTION/FLOOR
+    docstring for why."""
     prompt_overhead_tokens: int = 1200
     safety_margin_pct: float = 0.10
+
+    def __post_init__(self):
+        if self.response_max_tokens is None:
+            from . import config as _config
+            object.__setattr__(
+                self, "response_max_tokens",
+                _config._default_response_max_tokens(self.context_budget),
+            )
 
     def usable_budget(self) -> int:
         return int(self.context_budget * (1 - self.safety_margin_pct)) - self.response_max_tokens

@@ -14,19 +14,34 @@ use it as the output's primary framing.
 import re
 
 
-_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
-_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
+_ANALYSIS_RE = re.compile(r"<analysis>.*?(?:</analysis>|\Z)", re.DOTALL)
+_SUMMARY_OPEN_RE = re.compile(r"<summary>")
+_SUMMARY_CLOSE_RE = re.compile(r"</summary>")
 _BLANK_LINES_RE = re.compile(r"\n\n+")
 
 
 def clean_summary(raw_text: str) -> str:
     """Port of FBn: strip <analysis>, extract <summary> prefixed
-    'Summary:\\n', collapse repeated blank lines."""
+    'Summary:\\n', collapse repeated blank lines.
+
+    DEVIATION FROM SOURCE (FBn): a local model can run out of max_tokens
+    before closing its <summary> tag -- observed against qwen3.8-27b on a
+    large real transcript, where the response was cut off mid-sentence
+    with no closing tag at all. FBn's regex requires both tags and would
+    leave the literal "<summary>" marker in the output verbatim in that
+    case. Here, an opening <summary> with no matching close is treated as
+    running to the end of the string rather than left unprocessed -- same
+    treatment applied to <analysis> for the symmetric case."""
     text = _ANALYSIS_RE.sub("", raw_text, count=1)
-    match = _SUMMARY_RE.search(text)
-    if match:
-        body = (match.group(1) or "").strip()
-        text = _SUMMARY_RE.sub(f"Summary:\n{body}", text, count=1)
+
+    open_match = _SUMMARY_OPEN_RE.search(text)
+    if open_match:
+        close_match = _SUMMARY_CLOSE_RE.search(text, open_match.end())
+        body_end = close_match.start() if close_match else len(text)
+        tail_start = close_match.end() if close_match else len(text)
+        body = text[open_match.end():body_end].strip()
+        text = text[:open_match.start()] + f"Summary:\n{body}" + text[tail_start:]
+
     text = _BLANK_LINES_RE.sub("\n\n", text)
     return text.strip()
 
