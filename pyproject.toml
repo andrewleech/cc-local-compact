@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cc-local-compact"
+version = "0.1.0"
+description = "MCP server that replicates Claude Code's /compact against a locally-hosted Anthropic-compatible model, operating on a session's JSONL transcript."
+readme = "cc_local_compact/README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastmcp>=2.0,<3",
+    "anthropic>=0.57,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
+
+[project.scripts]
+cc-local-compact = "cc_local_compact.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cc_local_compact"]
