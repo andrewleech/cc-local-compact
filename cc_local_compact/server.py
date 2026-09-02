@@ -26,6 +26,7 @@ def _run_compaction(
     output_path: Path | None,
     fallback_model: str | None = None,
     append_to_jsonl: bool = False,
+    resolution_meta: dict | None = None,
 ) -> dict:
     cfg = config_mod.load_config()
     resolved_model = model or cfg.model
@@ -54,6 +55,16 @@ def _run_compaction(
             )
         summarize_fn = fallback.with_fallback(summarize_fn, fallback_summarize_fn)
 
+    resolution_fields = {"session_path": str(session_path), **(resolution_meta or {"source": "explicit"})}
+    if resolution_fields.get("ambiguous"):
+        resolution_fields["session_path_warning"] = (
+            f"session_path was not given explicitly, and {resolution_fields.get('candidate_count')} "
+            "session transcripts exist for this project -- the most-recently-modified one was picked "
+            "as a guess, not a guarantee it's the caller's own session (no reliable mechanism exists "
+            "for an MCP server to know its calling session, see discovery.py). Pass session_path "
+            "explicitly if this needs to be certain, or call list_sessions first to disambiguate."
+        )
+
     start_time = time.monotonic()
     result = multipass.run_multi_pass(lines, summarize_fn, loop_config, custom_instructions)
     duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -64,6 +75,7 @@ def _run_compaction(
             "reason": result.reason,
             "detail": result.detail,
             "passes": len(result.passes),
+            **resolution_fields,
         }
 
     preserved = result.final_preserved_tail or []
@@ -103,6 +115,7 @@ def _run_compaction(
         "multi_pass_reason": result.reason,
         "pre_tokens_estimate": pre_tokens,
         "post_tokens_estimate": post_tokens,
+        **resolution_fields,
     }
 
     if append_to_jsonl:
@@ -143,9 +156,21 @@ def compact_session(
     append_to_jsonl: bool = False,
 ) -> dict:
     """Summarize a Claude Code session transcript against the local model,
-    writing a markdown summary file. If session_path is omitted, discovers
-    the most recently modified .jsonl for the current working directory's
-    project. If fallback_model is given, any pass whose response fails a
+    writing a markdown summary file.
+
+    IMPORTANT: session_path identifies WHICH session gets compacted, and
+    there is no reliable way for this tool to know which session is
+    calling it (no environment variable, no MCP protocol field -- checked,
+    not assumed; see discovery.py's module docstring). If session_path is
+    omitted, this falls back to the most-recently-modified .jsonl for the
+    resolved project directory, which is only guaranteed correct when
+    exactly one session exists there. Call list_sessions first to check,
+    or pass session_path explicitly, whenever precision matters (e.g. more
+    than one Claude Code window open on the same project). The result's
+    session_path/source/ambiguous fields report which file was actually
+    used and whether that was a guess.
+
+    If fallback_model is given, any pass whose response fails a
     structural sanity check (see validate.py) is retried against that
     model instead -- lets a fast/small primary model handle most passes
     while a slower/larger model only gets used where actually needed.
@@ -159,14 +184,13 @@ def compact_session(
     recommended on a session the real Claude Code client currently has
     open; safe to use on a session that's closed or won't be resumed
     imminently."""
-    resolved_session = (
-        Path(session_path) if session_path else discovery.most_recent_session(Path.cwd())
-    )
+    resolved_cwd = discovery.resolve_cwd()
+    resolved_session, resolution_meta = discovery.resolve_session(session_path, resolved_cwd)
     if resolved_session is None:
         return {
             "ok": False,
             "reason": "no_session_found",
-            "detail": f"no session found for cwd {Path.cwd()}",
+            "detail": f"no session found for project directory {resolved_cwd}",
         }
     return _run_compaction(
         resolved_session,
@@ -176,14 +200,19 @@ def compact_session(
         Path(output_path) if output_path else None,
         fallback_model,
         append_to_jsonl,
+        resolution_meta,
     )
 
 
 @mcp.tool
 def list_sessions(project_cwd: str | None = None) -> list[dict]:
-    """List available session transcripts (path, mtime, size) for the
-    given or current working directory's project."""
-    cwd = Path(project_cwd) if project_cwd else Path.cwd()
+    """List available session transcripts (path, mtime, size, newest
+    first) for the given project directory, or the resolved current one
+    (CLAUDE_PROJECT_DIR if set, else this process' own cwd). Call this
+    before compact_session when more than one session might exist for a
+    project, to pick session_path explicitly rather than relying on
+    compact_session's most-recently-modified fallback guess."""
+    cwd = Path(project_cwd) if project_cwd else discovery.resolve_cwd()
     return discovery.list_sessions(cwd)
 
 

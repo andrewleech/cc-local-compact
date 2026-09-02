@@ -9,12 +9,10 @@ from . import discovery, server
 
 
 def _cmd_compact(args: argparse.Namespace) -> None:
-    session_path = (
-        Path(args.session_path) if args.session_path
-        else discovery.most_recent_session(Path.cwd())
-    )
+    resolved_cwd = discovery.resolve_cwd()
+    session_path, resolution_meta = discovery.resolve_session(args.session_path, resolved_cwd)
     if session_path is None:
-        print(json.dumps({"ok": False, "reason": "no_session_found"}))
+        print(json.dumps({"ok": False, "reason": "no_session_found", "detail": f"no session found for project directory {resolved_cwd}"}))
         raise SystemExit(1)
     result = server._run_compaction(
         session_path,
@@ -24,6 +22,7 @@ def _cmd_compact(args: argparse.Namespace) -> None:
         Path(args.output_path) if args.output_path else None,
         args.fallback_model,
         args.append_to_jsonl,
+        resolution_meta,
     )
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
@@ -31,7 +30,7 @@ def _cmd_compact(args: argparse.Namespace) -> None:
 
 
 def _cmd_list(args: argparse.Namespace) -> None:
-    cwd = Path(args.project_cwd) if args.project_cwd else Path.cwd()
+    cwd = Path(args.project_cwd) if args.project_cwd else discovery.resolve_cwd()
     print(json.dumps(discovery.list_sessions(cwd), indent=2))
 
 

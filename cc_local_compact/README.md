@@ -46,6 +46,12 @@ What appending *is* confirmed to do: it's safe. Directly tested against a live t
 
 Talks directly to the local inference backend via the `anthropic` Python SDK with a custom `base_url` -- the backend (`llama-swap` on `titan:8080`, serving Qwen3.8/Gemma-4 GGUF models) speaks the Anthropic `/v1/messages` protocol, so grouped transcript messages go through close to verbatim with no lossy translation layer. Does not route through the `cc-local-router` proxy process, though it defaults to reading the same `CLAUDE_NET_PROXY_LOCAL_URL`/`CLAUDE_NET_PROXY_LOCAL_MODEL` environment variables that proxy already uses, so there's one place to keep the backend address in sync.
 
+## Which session gets compacted
+
+There is no reliable, documented mechanism for a standard (non-self-hosted) Claude Code MCP server to learn which session is actually calling it -- checked directly, not assumed: no environment variable, no MCP protocol handshake field, nothing (Claude Code does pass `CLAUDE_PROJECT_DIR`, the stable project root, which `discovery.resolve_cwd()` uses in preference to this process' own cwd -- but that identifies the project, not the session).
+
+So when `compact_session`/`cc-local-compact compact` is called without an explicit `session_path`, it falls back to the most-recently-modified `.jsonl` in the resolved project directory (`discovery.resolve_session`). This is exactly right when precisely one session exists for that project, and a guess -- not a guarantee -- whenever more than one does (two Claude Code windows open on the same repo is a completely ordinary way to hit this). The result's `session_path`, `source`, and `ambiguous` fields report which file was actually used and whether that was a guess; `ambiguous: true` also adds a `session_path_warning` field spelling it out. Call `list_sessions` first to check before compacting, or pass `session_path` explicitly, whenever this needs to be certain rather than a best guess.
+
 ## Quick start
 
 ```bash
