@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from . import response
+from .multipass import PassRecord
 
 
 @dataclasses.dataclass(frozen=True)
@@ -30,13 +31,17 @@ class CompactionOutput:
     trigger: str
     model: str
     backend_base_url: str
-    total_groups: int
-    groups_summarized: int
-    groups_preserved: int
-    attempts: int
     context_budget: int
+    passes: tuple[PassRecord, ...]
+    multi_pass_reason: str | None
+    """Non-fatal caveat from a multi-pass run ("max_passes_reached" or
+    "later_pass_failed"), or None if it converged cleanly."""
     pre_tokens_estimate: int
+    """Estimate over the FULL original transcript, before any pass."""
     post_tokens_estimate: int
+    """Estimate over the FINAL residual (cleaned summary + preserved
+    tail combined) -- the same quantity real Claude Code's own
+    compactMetadata.postTokens measures, for direct comparability."""
     custom_instructions: str | None
     summary_text: str
     preserved_tail: list[dict]
@@ -82,18 +87,29 @@ def _preview_line(line: dict, max_len: int = 100) -> str:
     return f"- [{role}] {text}"
 
 
+def _pass_table(passes: tuple[PassRecord, ...]) -> list[str]:
+    header = "| pass | attempts | total_groups | groups_preserved | pre_tokens | post_tokens | fallback |"
+    sep = "|---|---|---|---|---|---|---|"
+    rows = [
+        f"| {p.pass_number} | {p.attempts} | {p.total_groups} | {p.groups_preserved} "
+        f"| {p.pre_tokens} | {p.post_tokens} | {'yes' if p.used_fallback else 'no'} |"
+        for p in passes
+    ]
+    return [header, sep, *rows]
+
+
 def render_markdown(output: CompactionOutput) -> str:
+    total_attempts = sum(p.attempts for p in output.passes)
     metadata_lines = [
         f"- source_session: {output.source_session}",
         f"- generated_at: {output.generated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}",
         f"- trigger: {output.trigger}",
         f"- model: {output.model}",
         f"- backend_base_url: {output.backend_base_url}",
-        f"- total_groups: {output.total_groups}",
-        f"- groups_summarized: {output.groups_summarized}",
-        f"- groups_preserved: {output.groups_preserved}",
-        f"- attempts: {output.attempts}",
         f"- context_budget: {output.context_budget}",
+        f"- pass_count: {len(output.passes)}",
+        f"- total_attempts: {total_attempts}",
+        f"- multi_pass_reason: {output.multi_pass_reason or '(converged)'}",
         f"- pre_tokens_estimate: {output.pre_tokens_estimate}",
         f"- post_tokens_estimate: {output.post_tokens_estimate}",
         f"- custom_instructions: {output.custom_instructions or '(none)'}",
@@ -110,9 +126,9 @@ def render_markdown(output: CompactionOutput) -> str:
 
     preview_lines = [_preview_line(line) for line in output.preserved_tail[:20]]
     preview_note = (
-        f"{len(output.preserved_tail)} preserved messages across "
-        f"{output.groups_preserved} groups. Not inlined in full (see source "
-        f"transcript); preview of the first {len(preview_lines)} below:"
+        f"{len(output.preserved_tail)} preserved messages in the final "
+        f"pass' residual. Not inlined in full (see source transcript); "
+        f"preview of the first {len(preview_lines)} below:"
     )
 
     return "\n".join([
@@ -120,6 +136,10 @@ def render_markdown(output: CompactionOutput) -> str:
         "",
         "## Metadata",
         *metadata_lines,
+        "",
+        "### Passes",
+        "",
+        *_pass_table(output.passes),
         "",
         "### Preserved Segment UUIDs",
         "",

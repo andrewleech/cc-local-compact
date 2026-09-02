@@ -11,10 +11,11 @@ later phase, not v1).
 """
 
 import dataclasses
+import json
 
 import anthropic
 
-from . import prompts
+from . import config, prompts
 
 
 @dataclasses.dataclass(frozen=True)
@@ -27,6 +28,11 @@ class AttemptResult:
     set when ok is False."""
     token_gap: int | None = None
     detail: str | None = None
+    used_fallback: bool = False
+    """Set by fallback.with_fallback when this result came from the
+    fallback model, not the primary. Always False from summarize_group
+    itself -- it has no concept of "fallback," only the composing wrapper
+    does."""
 
 
 PROMPT_TOO_LONG_PREFIX = "Prompt is too long"
@@ -87,18 +93,64 @@ def strip_media(group: list[dict]) -> list[dict]:
     return result
 
 
+STANDARD_CONTENT_BLOCK_TYPES = {
+    "text", "image", "document", "tool_use", "tool_result", "thinking", "redacted_thinking",
+}
+"""The Anthropic Messages API's own content block types (matching what
+tokens.py's estimate_block already recognizes). Claude Code's own JSONL
+also carries block types that are internal to the real client and never
+part of the actual API schema -- e.g. `tool_reference` (seen inside a
+tool_result's content for control-flow tools like EnterPlanMode, which
+don't have a real result payload). CONFIRMED against the live backend:
+llama.cpp's Anthropic-compat shim (qwen3.8-27b, gemma) tolerates an
+unrecognized block type, passing it through; vLLM's shim (qwen3.5-9b) does
+strict schema validation and rejects the whole request with "Unexpected
+item type in content." -- bisected down to exactly this block type on a
+real 488K-token transcript. Sanitizing before sending is required for
+correctness against any strict backend, not just a qwen3.5-9b quirk."""
+
+
+def _sanitize_block(block):
+    """Replace a non-standard content block with a plain text block
+    carrying a best-effort textual description, so a strict backend never
+    sees a block type outside the real Anthropic API schema. Recurses into
+    tool_result's own nested content, where the non-standard types have
+    actually been observed."""
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if block_type == "tool_result" and isinstance(block.get("content"), list):
+        return {**block, "content": [_sanitize_block(b) for b in block["content"]]}
+    if block_type in STANDARD_CONTENT_BLOCK_TYPES:
+        return block
+    if block_type == "tool_reference":
+        return {"type": "text", "text": f"[tool_reference: {block.get('tool_name', '?')}]"}
+    return {"type": "text", "text": json.dumps(block)}
+
+
+def _sanitize_content(content):
+    if not isinstance(content, list):
+        return content
+    return [_sanitize_block(block) for block in content]
+
+
 def _to_api_messages(group: list[dict]) -> list[dict]:
     """Reduce transcript lines to a minimal Anthropic messages array:
     {"role", "content"} only, dropping Claude-Code-only wrapper fields
-    (uuid, parentUuid, timestamp, cwd, etc). Lines without a user/assistant
-    role message (attachment/system control lines) are skipped -- they
-    aren't valid Anthropic message-array entries."""
+    (uuid, parentUuid, timestamp, cwd, etc), and sanitizing any non-
+    standard content block type (see STANDARD_CONTENT_BLOCK_TYPES). Lines
+    without a user/assistant role message (attachment/system control
+    lines) are skipped -- they aren't valid Anthropic message-array
+    entries."""
     messages = []
     for line in group:
         message = line.get("message")
         if not message or message.get("role") not in ("user", "assistant"):
             continue
-        messages.append({"role": message["role"], "content": message.get("content")})
+        messages.append({
+            "role": message["role"],
+            "content": _sanitize_content(message.get("content")),
+        })
     return messages
 
 
@@ -155,6 +207,21 @@ def _classify_error(error: anthropic.APIStatusError) -> AttemptResult:
     return AttemptResult(ok=False, reason="error", detail=message_text)
 
 
+REQUEST_TIMEOUT_SECONDS = 1800.0
+"""The anthropic SDK refuses a non-streaming call above ~21K max_tokens
+with no explicit timeout (its own client-side guard, assuming a request
+that large will take over 10 minutes and should stream to avoid a proxy
+timeout) -- hit in practice once context_budget-derived max_tokens grew
+past that for qwen3.8-27b's large window. This backend's own streaming
+implementation was tried as the fix and hung indefinitely (confirmed: even
+a trivial 2+2 request via client.messages.stream() never returned) --
+whatever its Anthropic-compat SSE framing is doing, this SDK's stream
+consumer doesn't see a terminating event. Passing any explicit `timeout`
+to create() bypasses the SDK's guard entirely (it only computes/applies
+that guard when the caller hasn't set one), so this stays on the
+known-working non-streaming path with a generous ceiling instead."""
+
+
 def summarize_group(
     client: anthropic.Anthropic,
     model: str,
@@ -169,9 +236,10 @@ def summarize_group(
     model literally continues the conversation, with no separate system
     prompt and no tools offered.
 
-    Native reasoning is explicitly disabled for this call. CONFIRMED
-    against the live backend: qwen3.8-27b has reasoning enabled by
-    default, emitting a hidden `thinking` content block that counts
+    Native reasoning is explicitly disabled for this call, for models
+    confirmed to need it (see config.MODELS_WITH_THINKING_TOGGLE).
+    CONFIRMED against the live backend: qwen3.8-27b has reasoning enabled
+    by default, emitting a hidden `thinking` content block that counts
     against max_tokens even for a trivial response (27 output tokens for
     "2+2=4"), and this module's own prompt already asks the model to
     externalize its reasoning as visible <analysis> text -- a second,
@@ -182,18 +250,31 @@ def summarize_group(
     this backend; only `extra_body.chat_template_kwargs.enable_thinking`
     (a llama.cpp/Jinja chat-template mechanism, not an Anthropic API
     parameter) actually suppressed it, confirmed by content blocks
-    dropping from ['thinking','text'] to just ['text']. Harmless to send
-    for models without this template hook (e.g. gemma-4-12b, which has
-    reasoning off by default already) -- an unrecognized template kwarg is
-    expected to be ignored, not to error."""
+    dropping from ['thinking','text'] to just ['text'].
+
+    NOT sent unconditionally: confirmed NOT harmless for every model.
+    qwen3.5-9b never emits a thinking block whether the override is sent
+    or not (content blocks are ['text'] either way), but sending it anyway
+    cost ~43x the latency for identical output in a real side-by-side test
+    (147.4s vs 3.4s, same input_tokens/output_tokens both runs) -- some
+    backends appear to take a much slower code path when handling a
+    non-default chat_template_kwargs value even when it changes nothing
+    observable. See config.MODELS_WITH_THINKING_TOGGLE for the allowlist
+    and its own per-model evidence."""
     working_group = strip_media(group) if strip_media_flag else group
     messages = _to_api_messages(working_group)
     messages.append({"role": "user", "content": prompts.build_prompt(custom_instructions)})
 
+    extra_body = (
+        {"chat_template_kwargs": {"enable_thinking": False}}
+        if model in config.MODELS_WITH_THINKING_TOGGLE else None
+    )
+
     try:
         response = client.messages.create(
             model=model, max_tokens=max_tokens, messages=messages,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            **({"extra_body": extra_body} if extra_body else {}),
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except anthropic.APIStatusError as error:
         return _classify_error(error)

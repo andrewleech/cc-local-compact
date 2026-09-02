@@ -1,0 +1,37 @@
+{
+  "description": "Pre-compaction slice of the live cc-local-compact development session, frozen as a fixed benchmark for re-running trials against a stable, reproducible baseline as the live session keeps growing. The raw .jsonl content itself is gitignored (real conversation transcript); this file records enough to identify and, if ever lost, regenerate the exact same slice.",
+  "raw_file": "benchmarks/session-2026-09-01-488k.jsonl",
+  "raw_line_count": 739,
+  "kept_line_count": 711,
+  "source": {
+    "live_session_path": "/home/corona/.claude/projects/-home-corona-cc-patcher/5b070f8b-d177-4d47-984e-8072959500ca.jsonl",
+    "extracted_via": "forked_session_pre_boundary",
+    "forked_session_path": "/home/corona/.claude/projects/-home-corona-cc-patcher/8b70862d-c755-4439-b22d-bca2afa128a1.jsonl",
+    "note": "Extracted as every raw line in the forked session before its compact_boundary line (raw index 739, 1-indexed line 740). The fork's uuids did not match the live session's own uuids for the same messages, so this could not be sliced from the live session directly by uuid -- the forked session's own pre-boundary content is exact by construction, since real Claude Code /compact ran on it."
+  },
+  "head": {
+    "type": "user",
+    "uuid": "ba224b98-b0ae-47ca-a350-c67b3ef57f0c",
+    "timestamp": "2026-09-01T00:08:26.048Z"
+  },
+  "tail": {
+    "type": "user",
+    "uuid": "987a5344-b524-48f0-940d-428abc4e198a",
+    "timestamp": "2026-09-01T11:31:36.505Z"
+  },
+  "real_claude_compact_baseline": {
+    "trigger": "manual",
+    "model": "claude-sonnet-5",
+    "preTokens": 488035,
+    "postTokens": 14831,
+    "cumulativeDroppedTokens": 473204,
+    "durationMs": 216953,
+    "preservedMessageCount": 4,
+    "compactedInSessionPath": "/home/corona/.claude/projects/-home-corona-cc-patcher/8b70862d-c755-4439-b22d-bca2afa128a1.jsonl",
+    "compactBoundaryUuid": "70c14ac2-ef15-44f3-ace2-09faa95bb351"
+  },
+  "cc_local_compact_estimate": {
+    "chars_over_4_heuristic_tokens": 488037,
+    "note": "estimate_transcript_tokens() against this exact slice, essentially exact match (2-token difference) against real Claude's reported preTokens -- confirms this is the same content Claude compacted, and that the chars/4 heuristic is accurate for this transcript."
+  }
+}

@@ -1,4 +1,5 @@
 from cc_local_compact import markdown_out
+from cc_local_compact.multipass import PassRecord
 
 
 def _sample_output(tmp_path):
@@ -9,11 +10,11 @@ def _sample_output(tmp_path):
         trigger="manual",
         model="qwen3.8-27b",
         backend_base_url="http://titan:8080",
-        total_groups=5,
-        groups_summarized=3,
-        groups_preserved=2,
-        attempts=2,
         context_budget=32000,
+        passes=(
+            PassRecord(pass_number=1, attempts=2, total_groups=5, groups_preserved=2, pre_tokens=71400, post_tokens=15000),
+        ),
+        multi_pass_reason=None,
         pre_tokens_estimate=71400,
         post_tokens_estimate=6100,
         custom_instructions="focus on tests",
@@ -33,15 +34,18 @@ def test_render_markdown_contains_sections(tmp_path):
     text = markdown_out.render_markdown(output)
     assert "# Compact Summary" in text
     assert "## Metadata" in text
+    assert "### Passes" in text
     assert "## Summary" in text
     assert "## Resume Preamble" in text
     assert "## Preserved Tail" in text
     assert "- model: qwen3.8-27b" in text
-    assert "- groups_preserved: 2" in text
+    assert "- pass_count: 1" in text
+    assert "- multi_pass_reason: (converged)" in text
     assert "- preserved_segment.uuid_count: 2" in text
     assert '["p1", "p2"]' in text
     assert "Summary:" in text
     assert "- [user] hello" in text
+    assert "| 1 | 2 | 5 | 2 | 71400 | 15000 |" in text
 
 
 def test_write_markdown_creates_file(tmp_path):

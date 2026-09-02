@@ -49,7 +49,24 @@ def estimate_block(block, chars_per_token: int = 4) -> int:
             chars_per_token,
         )
     if block_type == "thinking":
-        return count_chars_over_n(block.get("thinking"), chars_per_token)
+        # DEVIATION from nt: the real function only counts `.thinking`
+        # (the visible text), never `.signature`. Confirmed against a real
+        # extended-thinking session: 117 assistant turns had thinking:""
+        # (visible text redacted/summarized away) with a substantial
+        # signature blob -- 518,620 signature chars (~129,655 estimated
+        # tokens) completely invisible to the unmodified heuristic across
+        # one 488K-token transcript, enough to make a "residual fits"
+        # convergence claim in multipass.py meaningfully wrong. The real
+        # app can afford to ignore this (Claude's own context margin is
+        # large); this tool's whole purpose is fitting a much smaller
+        # target window reliably, so undercounting real payload data by
+        # this much is a correctness problem here that it isn't there.
+        # The signature is verbatim payload if this message is ever
+        # resubmitted, so it counts the same way redacted_thinking's
+        # `.data` already does below.
+        return count_chars_over_n(block.get("thinking"), chars_per_token) + count_chars_over_n(
+            block.get("signature"), chars_per_token,
+        )
     if block_type == "redacted_thinking":
         return count_chars_over_n(block.get("data"), chars_per_token)
     return count_chars_over_n(json.dumps(block), chars_per_token)

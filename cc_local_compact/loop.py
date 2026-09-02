@@ -69,6 +69,9 @@ class LoopResult:
     total_usage: dict | None = None
     messages_to_preserve: list[dict] | None = None
     detail: str | None = None
+    used_fallback: bool = False
+    """True if the successful attempt's AttemptResult.used_fallback was
+    set -- see fallback.py. Only meaningful when ok is True."""
 
 
 SummarizeFn = Callable[[list[dict], "str | None", bool], AttemptResult]
@@ -156,6 +159,7 @@ def run_loop(
                 summary_text=result.summary_text,
                 total_usage=result.total_usage,
                 messages_to_preserve=preserve_set,
+                used_fallback=result.used_fallback,
             )
 
         if result.reason == "aborted":

@@ -22,6 +22,7 @@ def _cmd_compact(args: argparse.Namespace) -> None:
         args.context_budget,
         args.model,
         Path(args.output_path) if args.output_path else None,
+        args.fallback_model,
     )
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
@@ -46,6 +47,7 @@ def main() -> None:
     compact_parser.add_argument("--instructions", dest="custom_instructions", default=None)
     compact_parser.add_argument("--context-budget", type=int, default=None)
     compact_parser.add_argument("--model", default=None)
+    compact_parser.add_argument("--fallback-model", dest="fallback_model", default=None)
     compact_parser.add_argument("--output", dest="output_path", default=None)
     compact_parser.set_defaults(func=_cmd_compact)
 
