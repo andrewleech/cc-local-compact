@@ -1,5 +1,4 @@
-"""Session-transcript discovery: cwd -> project-dir slug -> most recently
-modified .jsonl in that directory.
+"""Session-transcript discovery: cwd -> project-dir slug -> session .jsonl.
 
 The slug algorithm (cwd path with every "/" replaced by "-") is inferred
 from observed real directory names (e.g. ~/.claude/projects/-home-corona-
@@ -8,17 +7,29 @@ Claude Code's own source -- if a lookup ever comes up empty for a project
 that clearly has sessions, treat that as a sign this needs revisiting
 rather than assuming the session doesn't exist.
 
-IMPORTANT LIMITATION, confirmed via investigation (not assumed): there is
-no documented mechanism -- no environment variable, no MCP protocol field,
-nothing -- for a standard (non-self-hosted) Claude Code MCP server to
-learn which session is actually calling it. `most_recent_session` is a
-heuristic (most-recently-modified .jsonl in the resolved project
-directory), not a reliable identification of the caller. It's exactly
-right when exactly one session exists for that project; it's a guess, and
-can silently pick the wrong file, whenever more than one does (e.g. two
-Claude Code windows open on the same repo). Callers (server.py) surface
-this ambiguity explicitly rather than trusting the guess quietly -- see
-server.py's compact_session docstring and its session_path_source /
+CLAUDE_CODE_SESSION_ID identifies the caller directly. This reverses an
+earlier finding in this module (docs and the public MCP protocol document
+no such mechanism) -- confirmed wrong by extracting the actual MCP stdio
+spawn code from the installed Claude Code binary (2.1.258): every stdio
+MCP server is launched with
+`env:{...inherited,CLAUDE_PROJECT_DIR:mn(),CLAUDE_CODE_SESSION_ID:Q(),CLAUDECODE:"1",...serverEnv}`,
+where `Q()` is the same current-session-id accessor used for prompt
+`${CLAUDE_SESSION_ID}` substitution elsewhere in the app. Neither
+claude-net's nor cc-local-router's patcher providers inject this (grepped
+both, no hits) -- it's stock behaviour, not something layered on by
+cc-patcher. `resolve_session` uses it as the primary source; a caller with
+this env var set gets an authoritative path, not a guess, even with
+several sessions open on the same project.
+
+It's undocumented (internal to the app, no stability guarantee across
+versions), so `most_recent_session` -- most-recently-modified .jsonl in
+the resolved project directory -- stays as the fallback for whenever it's
+absent (e.g. this tool's own CLI run standalone outside an MCP session, or
+a Claude Code version that doesn't set it). That fallback is a real guess:
+exactly right when exactly one session exists for the project, and can
+silently pick the wrong file whenever more than one does. Callers
+(server.py) surface which path was taken and whether it was a guess --
+see compact_session's docstring and the session_path_source /
 session_path_warning result fields.
 """
 
@@ -81,16 +92,28 @@ def resolve_session(
     sure that resolution actually is. Returns (path, meta):
       - explicit_path given: ("explicit", the given path -- no ambiguity,
         the caller told us directly).
-      - explicit_path omitted: falls back to the most-recently-modified
-        .jsonl in the resolved project directory. meta["ambiguous"] is
-        True whenever more than one session exists for that project --
-        there is no reliable way for this tool to know which one is
-        actually the caller's own session (see this module's docstring),
-        so a caller getting True back should treat the resolved path as a
-        guess, not a guarantee, and prefer passing session_path explicitly
-        when precision matters."""
+      - explicit_path omitted, CLAUDE_CODE_SESSION_ID set and its .jsonl
+        exists in the resolved project directory: ("claude_code_session_id_env",
+        not a guess -- see this module's docstring) that env var identifies
+        the calling session directly, injected by Claude Code itself into
+        every stdio MCP server's environment.
+      - otherwise: falls back to the most-recently-modified .jsonl in the
+        resolved project directory. meta["ambiguous"] is True whenever more
+        than one session exists for that project -- this heuristic can't
+        tell them apart, so a caller getting True back should treat the
+        resolved path as a guess, not a guarantee, and prefer passing
+        session_path explicitly when precision matters."""
     if explicit_path:
         return Path(explicit_path), {"source": "explicit"}
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if sid:
+        candidate = project_sessions_dir(cwd, claude_home) / f"{sid}.jsonl"
+        if candidate.is_file():
+            return candidate, {
+                "source": "claude_code_session_id_env",
+                "session_id": sid,
+                "ambiguous": False,
+            }
     candidates = list_sessions(cwd, claude_home)
     if not candidates:
         return None, {"source": "auto_discovered_heuristic", "candidate_count": 0, "ambiguous": False}

@@ -59,7 +59,37 @@ def test_resolve_session_explicit_path_no_ambiguity():
     assert meta == {"source": "explicit"}
 
 
-def test_resolve_session_auto_discover_single_candidate_not_ambiguous(tmp_path):
+def test_resolve_session_uses_claude_code_session_id_env(monkeypatch, tmp_path):
+    cwd = tmp_path / "project"
+    claude_home = _make_session_dir(tmp_path, cwd)
+    sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
+    sid = "5b070f8b-d177-4d47-984e-8072959500ca"
+    (sessions_dir / f"{sid}.jsonl").write_text("{}")
+    # A decoy that's newer would win the heuristic -- proves the env var
+    # path is checked first, not just first when nothing else matches.
+    time.sleep(0.01)
+    (sessions_dir / "decoy.jsonl").write_text("{}")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+
+    path, meta = discovery.resolve_session(None, cwd, claude_home)
+    assert path.name == f"{sid}.jsonl"
+    assert meta == {"source": "claude_code_session_id_env", "session_id": sid, "ambiguous": False}
+
+
+def test_resolve_session_env_var_set_but_no_matching_file_falls_back(monkeypatch, tmp_path):
+    cwd = tmp_path / "project"
+    claude_home = _make_session_dir(tmp_path, cwd)
+    sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
+    (sessions_dir / "only.jsonl").write_text("{}")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "no-such-session-id")
+
+    path, meta = discovery.resolve_session(None, cwd, claude_home)
+    assert path.name == "only.jsonl"
+    assert meta["source"] == "auto_discovered_heuristic"
+
+
+def test_resolve_session_auto_discover_single_candidate_not_ambiguous(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     cwd = tmp_path / "project"
     claude_home = _make_session_dir(tmp_path, cwd)
     sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
@@ -72,7 +102,8 @@ def test_resolve_session_auto_discover_single_candidate_not_ambiguous(tmp_path):
     assert meta["ambiguous"] is False
 
 
-def test_resolve_session_auto_discover_multiple_candidates_is_ambiguous(tmp_path):
+def test_resolve_session_auto_discover_multiple_candidates_is_ambiguous(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     cwd = tmp_path / "project"
     claude_home = _make_session_dir(tmp_path, cwd)
     sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
@@ -86,7 +117,8 @@ def test_resolve_session_auto_discover_multiple_candidates_is_ambiguous(tmp_path
     assert meta["ambiguous"] is True
 
 
-def test_resolve_session_no_candidates(tmp_path):
+def test_resolve_session_no_candidates(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     cwd = tmp_path / "project"
     claude_home = _make_session_dir(tmp_path, cwd)
     path, meta = discovery.resolve_session(None, cwd, claude_home)

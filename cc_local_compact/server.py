@@ -58,11 +58,11 @@ def _run_compaction(
     resolution_fields = {"session_path": str(session_path), **(resolution_meta or {"source": "explicit"})}
     if resolution_fields.get("ambiguous"):
         resolution_fields["session_path_warning"] = (
-            f"session_path was not given explicitly, and {resolution_fields.get('candidate_count')} "
-            "session transcripts exist for this project -- the most-recently-modified one was picked "
-            "as a guess, not a guarantee it's the caller's own session (no reliable mechanism exists "
-            "for an MCP server to know its calling session, see discovery.py). Pass session_path "
-            "explicitly if this needs to be certain, or call list_sessions first to disambiguate."
+            f"session_path was not given explicitly, CLAUDE_CODE_SESSION_ID was unset or its .jsonl "
+            f"wasn't found, and {resolution_fields.get('candidate_count')} session transcripts exist "
+            "for this project -- the most-recently-modified one was picked as a guess, not a guarantee "
+            "it's the caller's own session (see discovery.py). Pass session_path explicitly if this "
+            "needs to be certain, or call list_sessions first to disambiguate."
         )
 
     start_time = time.monotonic()
@@ -158,17 +158,19 @@ def compact_session(
     """Summarize a Claude Code session transcript against the local model,
     writing a markdown summary file.
 
-    IMPORTANT: session_path identifies WHICH session gets compacted, and
-    there is no reliable way for this tool to know which session is
-    calling it (no environment variable, no MCP protocol field -- checked,
-    not assumed; see discovery.py's module docstring). If session_path is
-    omitted, this falls back to the most-recently-modified .jsonl for the
-    resolved project directory, which is only guaranteed correct when
-    exactly one session exists there. Call list_sessions first to check,
-    or pass session_path explicitly, whenever precision matters (e.g. more
-    than one Claude Code window open on the same project). The result's
-    session_path/source/ambiguous fields report which file was actually
-    used and whether that was a guess.
+    session_path identifies WHICH session gets compacted. If omitted, this
+    resolves it from the CLAUDE_CODE_SESSION_ID environment variable that
+    Claude Code injects into every stdio MCP server's own environment (see
+    discovery.py's module docstring for how this was confirmed) -- that
+    identifies the calling session directly, not a guess, even with more
+    than one Claude Code window open on the same project. Only when that
+    env var is unset or its .jsonl can't be found does this fall back to
+    the most-recently-modified .jsonl for the resolved project directory,
+    which is a real guess, only guaranteed correct when exactly one
+    session exists there. Call list_sessions first to check, or pass
+    session_path explicitly, whenever precision matters and that fallback
+    might be in play. The result's session_path/source/ambiguous fields
+    report which path was actually taken and whether it was a guess.
 
     If fallback_model is given, any pass whose response fails a
     structural sanity check (see validate.py) is retried against that
