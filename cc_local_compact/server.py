@@ -1,11 +1,15 @@
 """FastMCP stdio server exposing compact_session and list_sessions."""
 
+import time
 from pathlib import Path
 
 import anthropic
 from fastmcp import FastMCP
 
-from . import client, config as config_mod, discovery, fallback, loop, markdown_out, multipass, response, tokens, transcript
+from . import (
+    client, config as config_mod, discovery, fallback, jsonl_append, loop,
+    markdown_out, multipass, response, tokens, transcript,
+)
 
 mcp = FastMCP("cc-local-compact")
 
@@ -21,6 +25,7 @@ def _run_compaction(
     model: str | None,
     output_path: Path | None,
     fallback_model: str | None = None,
+    append_to_jsonl: bool = False,
 ) -> dict:
     cfg = config_mod.load_config()
     resolved_model = model or cfg.model
@@ -49,7 +54,9 @@ def _run_compaction(
             )
         summarize_fn = fallback.with_fallback(summarize_fn, fallback_summarize_fn)
 
+    start_time = time.monotonic()
     result = multipass.run_multi_pass(lines, summarize_fn, loop_config, custom_instructions)
+    duration_ms = int((time.monotonic() - start_time) * 1000)
 
     if not result.ok:
         return {
@@ -87,7 +94,7 @@ def _run_compaction(
     )
     written_path = markdown_out.write_markdown(output, output_path)
 
-    return {
+    response_dict = {
         "ok": True,
         "output_path": str(written_path),
         "summary": cleaned_summary,
@@ -98,6 +105,32 @@ def _run_compaction(
         "post_tokens_estimate": post_tokens,
     }
 
+    if append_to_jsonl:
+        try:
+            append_result = jsonl_append.append_compaction(
+                session_path=session_path,
+                summary_text=result.final_summary_text,
+                preserved_tail=preserved,
+                trigger="manual",
+                pre_tokens=pre_tokens,
+                post_tokens=post_tokens,
+                duration_ms=duration_ms,
+            )
+            response_dict["jsonl_appended"] = True
+            response_dict["jsonl_boundary_uuid"] = append_result.boundary_uuid
+            response_dict["jsonl_note"] = (
+                "Boundary appended to the session's own JSONL in the same shape "
+                "the real /compact produces, for on-disk record consistency. "
+                "This does NOT reduce what gets sent to the remote model on the "
+                "next resumed turn -- confirmed an externally-appended boundary "
+                "is not respected by the client. See jsonl_append.py."
+            )
+        except Exception as error:
+            response_dict["jsonl_appended"] = False
+            response_dict["jsonl_append_error"] = str(error)
+
+    return response_dict
+
 
 @mcp.tool
 def compact_session(
@@ -107,6 +140,7 @@ def compact_session(
     model: str | None = None,
     output_path: str | None = None,
     fallback_model: str | None = None,
+    append_to_jsonl: bool = False,
 ) -> dict:
     """Summarize a Claude Code session transcript against the local model,
     writing a markdown summary file. If session_path is omitted, discovers
@@ -114,7 +148,17 @@ def compact_session(
     project. If fallback_model is given, any pass whose response fails a
     structural sanity check (see validate.py) is retried against that
     model instead -- lets a fast/small primary model handle most passes
-    while a slower/larger model only gets used where actually needed."""
+    while a slower/larger model only gets used where actually needed.
+
+    If append_to_jsonl is True, also appends a compact_boundary +
+    isCompactSummary sequence directly to session_path's own JSONL, in the
+    same shape the real /compact produces (see jsonl_append.py). This is
+    for on-disk record consistency only -- confirmed it does NOT reduce
+    what gets sent to the remote model on the next resumed turn (an
+    externally-appended boundary is not respected by the client). Not
+    recommended on a session the real Claude Code client currently has
+    open; safe to use on a session that's closed or won't be resumed
+    imminently."""
     resolved_session = (
         Path(session_path) if session_path else discovery.most_recent_session(Path.cwd())
     )
@@ -131,6 +175,7 @@ def compact_session(
         model,
         Path(output_path) if output_path else None,
         fallback_model,
+        append_to_jsonl,
     )
 
 

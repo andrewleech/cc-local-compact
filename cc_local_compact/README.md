@@ -34,9 +34,13 @@ The validation/fallback mechanism stays in the codebase regardless, as general i
 
 `fallback.with_fallback(primary, fallback)` composes two `SummarizeFn`s into one: call `primary` once, and only if it fails outright or its output fails `is_well_formed_summary`, call `fallback` instead. `loop.py`/`multipass.py` never know two models are involved -- they see one `SummarizeFn` either way. This means a fast/cheap primary model can handle whichever passes it's actually capable of, and a slower/more reliable model only gets invoked on the specific batches that need it, rather than distrusting the fast model globally because of one bad case. Enable it with `--fallback-model` (CLI) or the `fallback_model` param (MCP `compact_session` tool); `AttemptResult.used_fallback` and each `PassRecord.used_fallback` record whether it actually fired, surfaced in the output markdown's pass table and the `fallback_passes` count in the tool/CLI result.
 
-## v1 scope
+## Output: markdown by default, optional JSONL append
 
-Writes a standalone markdown summary file. Does **not** append a `compact_boundary` marker into the live session `.jsonl` -- mutating a session file the real Claude Code client may have open is untested and out of scope for this phase. See `docs/compact-architecture.md`, "Decision for the first implementation".
+Always writes a standalone markdown summary file. Optionally (`--append-jsonl` / `append_to_jsonl=True`) also appends a `compact_boundary` + `isCompactSummary` + re-chained preserved-tail sequence directly into the session's own `.jsonl` (`jsonl_append.py`), in the exact shape real Claude Code's `/compact` produces (see `docs/compact-architecture.md`, "Confirmed on-disk JSONL schema").
+
+**This does not reduce cost on the session's next resumed turn.** That was the original motivation for wanting it (avoid resending a session whose prompt cache has already expired), and it was tested directly and found not to work: a well-formed boundary injected into a live throwaway session's JSONL, *before that session was ever resumed*, had no effect -- the next turn reprocessed the entire original conversation, token-for-token indistinguishable from a normal resume with no boundary at all. Separately confirmed via Claude Code's own documentation (`cross-session-messaging.md`): slash commands arriving through any channel other than direct interactive terminal keystrokes -- a session's own JSONL, MCP tool/prompt output, Remote Control, the local cross-session messaging socket -- are never executed. There is no external mechanism to trigger the real client's `/compact` or `/clear`, or to make it reduce what it sends on a future turn.
+
+What appending *is* confirmed to do: it's safe. Directly tested against a live throwaway session (write the sequence, then `claude --resume` it, repeated across several trials) with no corruption and no errors -- the client just ignores the boundary and continues normally. So this exists purely for **on-disk record consistency**: a session's own transcript reflects that a compaction happened, in the real schema, for `/resume` picker display or any other tooling that parses this format -- not as a way to make the next turn cheaper. Avoid using it on a session the real Claude Code client currently has open, since concurrent-write behavior against a live client process hasn't been tested (only against a closed/idle session file).
 
 ## Backend
 
@@ -75,10 +79,11 @@ cc_local_compact/
   validate.py            structural sanity-check on a raw response, gates fallback
   fallback.py              composes a primary+fallback model pair into one SummarizeFn
   markdown_out.py            output file structure/writer
-  discovery.py                 cwd -> project-dir slug -> most recent session
-  server.py                       FastMCP tool surface (stdio)
-  cli.py                             standalone CLI
-config.py                              environment-variable resolution
+  jsonl_append.py              optional: append a compact_boundary to the session's own JSONL
+  discovery.py                   cwd -> project-dir slug -> most recent session
+  server.py                         FastMCP tool surface (stdio)
+  cli.py                               standalone CLI
+config.py                                environment-variable resolution
 ```
 
 ## Known deviations from the source

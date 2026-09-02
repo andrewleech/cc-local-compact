@@ -23,6 +23,7 @@ def _cmd_compact(args: argparse.Namespace) -> None:
         args.model,
         Path(args.output_path) if args.output_path else None,
         args.fallback_model,
+        args.append_to_jsonl,
     )
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
@@ -49,6 +50,15 @@ def main() -> None:
     compact_parser.add_argument("--model", default=None)
     compact_parser.add_argument("--fallback-model", dest="fallback_model", default=None)
     compact_parser.add_argument("--output", dest="output_path", default=None)
+    compact_parser.add_argument(
+        "--append-jsonl", dest="append_to_jsonl", action="store_true", default=False,
+        help=(
+            "Also append a compact_boundary sequence to the session's own JSONL, "
+            "matching the real /compact's on-disk shape. Record-consistency only -- "
+            "does not reduce cost on the session's next resumed turn. Avoid on a "
+            "session the real Claude Code client currently has open."
+        ),
+    )
     compact_parser.set_defaults(func=_cmd_compact)
 
     list_parser = subparsers.add_parser("list", help="List session transcripts for a project")
