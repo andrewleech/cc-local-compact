@@ -3,17 +3,51 @@ client, useful for development and debugging."""
 
 import argparse
 import json
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from . import discovery, server
+
+
+def _prompt_for_session(candidates: list[dict]) -> Path | None:
+    """Interactively pick one of several ambiguous candidates. Prints the
+    picker to stderr (stdout is reserved for the final JSON result) and
+    reads a choice from stdin. Returns None -- caller should exit(1) -- if
+    stdin isn't a terminal (nothing to interact with) or the user cancels."""
+    print(f"{len(candidates)} sessions exist for this project -- pick one:", file=sys.stderr)
+    for i, candidate in enumerate(candidates, 1):
+        when = datetime.fromtimestamp(candidate["mtime"]).strftime("%Y-%m-%d %H:%M")
+        print(f"  [{i}] {when}  {candidate['display_name']}", file=sys.stderr)
+        print(f"      {candidate['path']}", file=sys.stderr)
+    if not sys.stdin.isatty():
+        print(
+            "stdin is not a terminal, so this can't prompt for a choice -- "
+            "re-run with session_path set to one of the paths above.",
+            file=sys.stderr,
+        )
+        return None
+    while True:
+        choice = input(f"Select session [1-{len(candidates)}] (blank to cancel): ").strip()
+        if not choice:
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(candidates):
+            return Path(candidates[int(choice) - 1]["path"])
+        print("Invalid selection, try again.", file=sys.stderr)
 
 
 def _cmd_compact(args: argparse.Namespace) -> None:
     resolved_cwd = discovery.resolve_cwd()
     session_path, resolution_meta = discovery.resolve_session(args.session_path, resolved_cwd)
     if session_path is None:
-        print(json.dumps({"ok": False, "reason": "no_session_found", "detail": f"no session found for project directory {resolved_cwd}"}))
-        raise SystemExit(1)
+        if resolution_meta.get("source") == "ambiguous":
+            session_path = _prompt_for_session(resolution_meta["candidates"])
+            if session_path is None:
+                raise SystemExit(1)
+            resolution_meta = {"source": "user_selected", "candidate_count": resolution_meta["candidate_count"]}
+        else:
+            print(json.dumps({"ok": False, "reason": "no_session_found", "detail": f"no session found for project directory {resolved_cwd}"}))
+            raise SystemExit(1)
     result = server._run_compaction(
         session_path,
         args.custom_instructions,

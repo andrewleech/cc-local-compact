@@ -22,19 +22,31 @@ this env var set gets an authoritative path, not a guess, even with
 several sessions open on the same project.
 
 It's undocumented (internal to the app, no stability guarantee across
-versions), so `most_recent_session` -- most-recently-modified .jsonl in
-the resolved project directory -- stays as the fallback for whenever it's
-absent (e.g. this tool's own CLI run standalone outside an MCP session, or
-a Claude Code version that doesn't set it). That fallback is a real guess:
-exactly right when exactly one session exists for the project, and can
-silently pick the wrong file whenever more than one does. Callers
-(server.py) surface which path was taken and whether it was a guess --
-see compact_session's docstring and the session_path_source /
-session_path_warning result fields.
+versions), so a fallback still matters for whenever it's absent (e.g. this
+tool's own CLI run standalone outside an MCP session, or a Claude Code
+version that doesn't set it). There is deliberately no mtime-based guess
+in that fallback: picking "most recently modified" silently can pick the
+wrong session whenever more than one exists for the project, and a wrong
+pick is a worse failure mode than making the caller choose. Instead,
+`resolve_session` returns no path and a candidate list -- each entry
+carries a human-identifiable `display_name` from `describe_session`, so a
+human (via cli.py's interactive picker) or an agent (via the MCP tool's
+returned candidates) can actually tell the sessions apart well enough to
+choose correctly, rather than being handed bare paths and mtimes.
 """
 
+import html
 import os
+import re
+import shutil
 from pathlib import Path
+
+from . import transcript
+
+_RENAME_RE = re.compile(
+    r"<command-name>/rename</command-name>.*?<command-args>(.*?)</command-args>",
+    re.DOTALL,
+)
 
 
 def resolve_cwd(explicit: Path | None = None) -> Path:
@@ -61,17 +73,93 @@ def project_sessions_dir(cwd: Path, claude_home: Path | None = None) -> Path:
     return home / "projects" / project_dir_slug(cwd)
 
 
-def most_recent_session(cwd: Path, claude_home: Path | None = None) -> Path | None:
-    sessions_dir = project_sessions_dir(cwd, claude_home)
-    if not sessions_dir.is_dir():
-        return None
-    candidates = [p for p in sessions_dir.glob("*.jsonl") if p.is_file()]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+def _terminal_width(default: int = 80) -> int:
+    try:
+        return shutil.get_terminal_size(fallback=(default, 24)).columns
+    except OSError:
+        return default
+
+
+def _visible_text(content) -> str | None:
+    """Text a person actually reads on screen for one message's content --
+    "text" content blocks only, never tool_use/tool_result/image/thinking."""
+    if isinstance(content, str):
+        return content or None
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        text = "".join(parts)
+        return text or None
+    return None
+
+
+def _condense(text: str, width: int) -> str:
+    snippet = re.sub(r"\s+", " ", text).strip()
+    if len(snippet) > width:
+        snippet = snippet[: max(width - 1, 0)].rstrip() + "…"
+    return snippet
+
+
+def describe_session(path: Path) -> dict:
+    """Derive a human-identifiable display name for a session transcript,
+    for telling several ambiguous candidates apart with no other signal.
+    Returns {"display_name": str, "display_name_source": str}.
+
+    Two sources, in priority order, read off the main thread (via
+    transcript.load_transcript, not raw file order -- a rewound/abandoned
+    branch's stale rename or last message must not win over what's
+    actually live):
+      - "renamed": the last `/rename` command on the thread. Claude Code
+        records these as type:"system",subtype:"local_command" lines with
+        the new title in a <command-args> tag -- the title the user
+        themselves chose for the session, and the most reliable signal
+        available short of an explicit session_path.
+      - "last_message": failing that, the last visible message on the
+        thread (text content blocks only), condensed to one line and
+        truncated to about one terminal row -- what a person would
+        actually see on screen at the end of the session.
+      - "empty": neither exists (an essentially-empty transcript).
+      - "error": the transcript couldn't be read/parsed at all.
+    """
+    try:
+        lines = transcript.load_transcript(path)
+    except (OSError, ValueError):
+        return {"display_name": "(unreadable transcript)", "display_name_source": "error"}
+
+    width = _terminal_width()
+    last_rename: str | None = None
+    last_text: str | None = None
+
+    for line in lines:
+        if line.get("type") == "system" and line.get("subtype") == "local_command":
+            content = line.get("content")
+            if isinstance(content, str):
+                match = _RENAME_RE.search(content)
+                if match:
+                    title = html.unescape(match.group(1)).strip()
+                    last_rename = title or None
+            continue
+        if line.get("type") in ("user", "assistant") and not line.get("isMeta"):
+            message = line.get("message") or {}
+            text = _visible_text(message.get("content"))
+            if text and text.strip():
+                last_text = text
+
+    if last_rename:
+        return {"display_name": last_rename, "display_name_source": "renamed"}
+    if last_text:
+        return {"display_name": _condense(last_text, width), "display_name_source": "last_message"}
+    return {"display_name": "(no visible content)", "display_name_source": "empty"}
 
 
 def list_sessions(cwd: Path, claude_home: Path | None = None) -> list[dict]:
+    """Available session transcripts for `cwd`'s project, each with a
+    describe_session-derived display_name to tell them apart. Sorted
+    newest-first for display purposes only -- see this module's docstring
+    for why that ordering is never used to auto-pick a winner."""
     sessions_dir = project_sessions_dir(cwd, claude_home)
     if not sessions_dir.is_dir():
         return []
@@ -80,7 +168,12 @@ def list_sessions(cwd: Path, claude_home: Path | None = None) -> list[dict]:
         if not path.is_file():
             continue
         stat = path.stat()
-        entries.append({"path": str(path), "mtime": stat.st_mtime, "size": stat.st_size})
+        entries.append({
+            "path": str(path),
+            "mtime": stat.st_mtime,
+            "size": stat.st_size,
+            **describe_session(path),
+        })
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
 
@@ -90,19 +183,23 @@ def resolve_session(
 ) -> tuple[Path | None, dict]:
     """Resolve which session .jsonl to operate on, with metadata about how
     sure that resolution actually is. Returns (path, meta):
-      - explicit_path given: ("explicit", the given path -- no ambiguity,
-        the caller told us directly).
+      - explicit_path given: (path, {"source": "explicit"}) -- no
+        ambiguity, the caller told us directly.
       - explicit_path omitted, CLAUDE_CODE_SESSION_ID set and its .jsonl
-        exists in the resolved project directory: ("claude_code_session_id_env",
-        not a guess -- see this module's docstring) that env var identifies
-        the calling session directly, injected by Claude Code itself into
-        every stdio MCP server's environment.
-      - otherwise: falls back to the most-recently-modified .jsonl in the
-        resolved project directory. meta["ambiguous"] is True whenever more
-        than one session exists for that project -- this heuristic can't
-        tell them apart, so a caller getting True back should treat the
-        resolved path as a guess, not a guarantee, and prefer passing
-        session_path explicitly when precision matters."""
+        exists in the resolved project directory: (path, {"source":
+        "claude_code_session_id_env", "session_id": ..., "ambiguous":
+        False}) -- not a guess, see this module's docstring.
+      - explicit_path omitted, env var unset/stale, exactly one session
+        exists for the project: (path, {"source": "only_candidate",
+        "candidate_count": 1}) -- unambiguous by elimination.
+      - explicit_path omitted, env var unset/stale, zero sessions exist:
+        (None, {"source": "no_session_found", "candidate_count": 0}).
+      - explicit_path omitted, env var unset/stale, more than one session
+        exists: (None, {"source": "ambiguous", "candidate_count": N,
+        "candidates": [...]}) -- deliberately refuses to guess (no
+        mtime-based auto-pick); `candidates` is list_sessions' full output
+        (path/mtime/size/display_name/display_name_source) so the caller
+        can present them for a human or agent to choose from."""
     if explicit_path:
         return Path(explicit_path), {"source": "explicit"}
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
@@ -116,10 +213,11 @@ def resolve_session(
             }
     candidates = list_sessions(cwd, claude_home)
     if not candidates:
-        return None, {"source": "auto_discovered_heuristic", "candidate_count": 0, "ambiguous": False}
-    resolved = Path(candidates[0]["path"])
-    return resolved, {
-        "source": "auto_discovered_heuristic",
+        return None, {"source": "no_session_found", "candidate_count": 0}
+    if len(candidates) == 1:
+        return Path(candidates[0]["path"]), {"source": "only_candidate", "candidate_count": 1}
+    return None, {
+        "source": "ambiguous",
         "candidate_count": len(candidates),
-        "ambiguous": len(candidates) > 1,
+        "candidates": candidates,
     }

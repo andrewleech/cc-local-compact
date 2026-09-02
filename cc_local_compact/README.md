@@ -50,16 +50,21 @@ Talks directly to the local inference backend via the `anthropic` Python SDK wit
 
 Claude Code sets `CLAUDE_CODE_SESSION_ID` (the calling session's own UUID) in the environment of every stdio MCP server it spawns, alongside `CLAUDE_PROJECT_DIR` (which `discovery.resolve_cwd()` uses in preference to this process' own cwd). This isn't documented anywhere public, but it's confirmed directly from the installed binary's own MCP stdio spawn code (Claude Code 2.1.258): `env:{...inherited,CLAUDE_PROJECT_DIR:mn(),CLAUDE_CODE_SESSION_ID:Q(),CLAUDECODE:"1",...serverEnv}`. `Q()` is the same current-session accessor used elsewhere in the app for `${CLAUDE_SESSION_ID}` prompt substitution. Neither `claude-net`'s nor `cc-local-router`'s patcher providers inject this -- it's stock Claude Code behaviour.
 
-So when `compact_session`/`cc-local-compact compact` is called without an explicit `session_path`, `discovery.resolve_session` first checks `CLAUDE_CODE_SESSION_ID` and, if its `.jsonl` exists in the resolved project directory, uses it directly -- an authoritative identification of the caller, not a guess, even with several sessions open on the same project. Only when that env var is unset or its file can't be found (e.g. running the CLI standalone outside an MCP session, or an older Claude Code build) does it fall back to the most-recently-modified `.jsonl` in the resolved project directory, which is a real guess: exactly right when precisely one session exists there, and can silently pick the wrong file whenever more than one does. The result's `session_path`, `source`, and `ambiguous` fields report which path was actually taken and whether it was a guess; `ambiguous: true` also adds a `session_path_warning` field spelling it out. Call `list_sessions` first to check before compacting, or pass `session_path` explicitly, whenever the fallback might be in play and this needs to be certain.
+So when `compact_session`/`cc-local-compact compact` is called without an explicit `session_path`, `discovery.resolve_session` first checks `CLAUDE_CODE_SESSION_ID` and, if its `.jsonl` exists in the resolved project directory, uses it directly -- an authoritative identification of the caller, not a guess, even with several sessions open on the same project. If that env var is unset/stale and exactly one session exists for the project, that one is used unambiguously by elimination.
 
-Since this env var is undocumented and internal, treat it as liable to change across Claude Code versions -- the mtime-based fallback is what keeps this tool working if it ever disappears, not a vestigial code path.
+Since this env var is undocumented and internal, treat it as liable to change across Claude Code versions -- so there has to be a real fallback for whenever it's absent (e.g. running the CLI standalone outside an MCP session, or an older Claude Code build) and more than one session exists for the project. There is deliberately **no mtime-based guess** in that fallback: silently picking "most recently modified" can pick the wrong session, and a wrong pick is worse than making the caller choose. Instead, resolution stops and hands back every candidate, each with a `display_name` from `discovery.describe_session` so they can actually be told apart:
+
+- the session's own `/rename` title, if it was ever renamed (Claude Code records `/rename` as a `type:"system",subtype:"local_command"` line with the new title in a `<command-args>` tag -- the most reliable signal short of an explicit path), the last one used if renamed more than once;
+- failing that, a condensed, one-line, terminal-width-truncated snippet of the last visible message on the transcript's main thread (text content only -- no tool calls/results/thinking) -- what a person would actually see on screen at the end of that session.
+
+`compact_session` (the MCP tool) returns `{"ok": false, "reason": "ambiguous_session", "candidates": [...]}` without compacting anything in this case -- the calling agent has to look at the candidates and re-call with `session_path` set explicitly (or call `list_sessions` first, which returns the same enriched candidate list). `cc-local-compact compact` (the CLI) instead prompts interactively: it prints the numbered, display-named candidate list and reads a selection from stdin, refusing to guess there either; if stdin isn't a terminal (e.g. run from a script) it prints the same list and exits non-zero instead of hanging on `input()`.
 
 ## Quick start
 
 ```bash
 pip install -e .[dev]
 cc-local-compact list      # session transcripts for the current project
-cc-local-compact compact   # compact the most recent session, budget derived from the model
+cc-local-compact compact   # resolves the session automatically, or prompts if more than one candidate exists
 ```
 
 ## Configuration
@@ -88,7 +93,7 @@ cc_local_compact/
   fallback.py              composes a primary+fallback model pair into one SummarizeFn
   markdown_out.py            output file structure/writer
   jsonl_append.py              optional: append a compact_boundary to the session's own JSONL
-  discovery.py                   cwd -> project-dir slug -> most recent session
+  discovery.py                   cwd -> project-dir slug -> session, via CLAUDE_CODE_SESSION_ID or interactive/agent disambiguation
   server.py                         FastMCP tool surface (stdio)
   cli.py                               standalone CLI
 config.py                                environment-variable resolution

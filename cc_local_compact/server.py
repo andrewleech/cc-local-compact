@@ -55,15 +55,11 @@ def _run_compaction(
             )
         summarize_fn = fallback.with_fallback(summarize_fn, fallback_summarize_fn)
 
+    # By the time _run_compaction runs, session_path is always a definite
+    # choice -- never a guess. compact_session returns early on an
+    # "ambiguous" resolution instead of calling this with one (see below);
+    # the CLI resolves ambiguity interactively before calling this too.
     resolution_fields = {"session_path": str(session_path), **(resolution_meta or {"source": "explicit"})}
-    if resolution_fields.get("ambiguous"):
-        resolution_fields["session_path_warning"] = (
-            f"session_path was not given explicitly, CLAUDE_CODE_SESSION_ID was unset or its .jsonl "
-            f"wasn't found, and {resolution_fields.get('candidate_count')} session transcripts exist "
-            "for this project -- the most-recently-modified one was picked as a guess, not a guarantee "
-            "it's the caller's own session (see discovery.py). Pass session_path explicitly if this "
-            "needs to be certain, or call list_sessions first to disambiguate."
-        )
 
     start_time = time.monotonic()
     result = multipass.run_multi_pass(lines, summarize_fn, loop_config, custom_instructions)
@@ -163,14 +159,20 @@ def compact_session(
     Claude Code injects into every stdio MCP server's own environment (see
     discovery.py's module docstring for how this was confirmed) -- that
     identifies the calling session directly, not a guess, even with more
-    than one Claude Code window open on the same project. Only when that
-    env var is unset or its .jsonl can't be found does this fall back to
-    the most-recently-modified .jsonl for the resolved project directory,
-    which is a real guess, only guaranteed correct when exactly one
-    session exists there. Call list_sessions first to check, or pass
-    session_path explicitly, whenever precision matters and that fallback
-    might be in play. The result's session_path/source/ambiguous fields
-    report which path was actually taken and whether it was a guess.
+    than one Claude Code window open on the same project. If that env var
+    is unset/stale and exactly one session exists for the project, that
+    one is used unambiguously by elimination.
+
+    If neither applies and more than one session transcript exists for the
+    project, this does NOT guess (no mtime-based fallback) -- it returns
+    {"ok": false, "reason": "ambiguous_session", "candidates": [...]}
+    without compacting anything. Each candidate carries path/mtime/size
+    plus a display_name (the session's own `/rename` title if it has one,
+    otherwise a condensed snippet of its last visible message -- see
+    discovery.describe_session) so the candidates can actually be told
+    apart; re-call with session_path set to the right one's path. Calling
+    list_sessions first gets the same candidate list without attempting a
+    compaction.
 
     If fallback_model is given, any pass whose response fails a
     structural sanity check (see validate.py) is retried against that
@@ -189,6 +191,17 @@ def compact_session(
     resolved_cwd = discovery.resolve_cwd()
     resolved_session, resolution_meta = discovery.resolve_session(session_path, resolved_cwd)
     if resolved_session is None:
+        if resolution_meta.get("source") == "ambiguous":
+            return {
+                "ok": False,
+                "reason": "ambiguous_session",
+                "detail": (
+                    f"{resolution_meta['candidate_count']} session transcripts exist for this project "
+                    "and none could be identified as the caller automatically -- pick one from "
+                    "candidates and re-call with session_path set to its path."
+                ),
+                "candidates": resolution_meta["candidates"],
+            }
         return {
             "ok": False,
             "reason": "no_session_found",
@@ -208,12 +221,16 @@ def compact_session(
 
 @mcp.tool
 def list_sessions(project_cwd: str | None = None) -> list[dict]:
-    """List available session transcripts (path, mtime, size, newest
-    first) for the given project directory, or the resolved current one
-    (CLAUDE_PROJECT_DIR if set, else this process' own cwd). Call this
-    before compact_session when more than one session might exist for a
-    project, to pick session_path explicitly rather than relying on
-    compact_session's most-recently-modified fallback guess."""
+    """List available session transcripts (path, mtime, size, display_name,
+    display_name_source, newest first for display only) for the given
+    project directory, or the resolved current one (CLAUDE_PROJECT_DIR if
+    set, else this process' own cwd). display_name is the session's own
+    `/rename` title if it has one, otherwise a condensed snippet of its
+    last visible message (see discovery.describe_session) -- use it to
+    tell candidates apart. Call this before compact_session when more than
+    one session might exist for a project, to pick session_path explicitly
+    -- compact_session refuses to guess when it can't identify the caller
+    and more than one candidate exists."""
     cwd = Path(project_cwd) if project_cwd else discovery.resolve_cwd()
     return discovery.list_sessions(cwd)
 
