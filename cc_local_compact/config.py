@@ -11,7 +11,20 @@ import os
 
 
 DEFAULT_BASE_URL = "http://titan:8080"
-DEFAULT_MODEL = "qwen3.8-27b"
+DEFAULT_MODEL = "qwen3.5-9b"
+"""As of 2026-09-02, qwen3.5-9b is the Q6 GGUF build (unsloth UD-Q6_K_XL,
+llama.cpp, full 262144 context) -- confirmed the best default for this
+tool's workload: on this project's own 488K-token benchmark it matched
+qwen3.8-27b's compaction quality and reliability (0 fallbacks needed, 0
+malformed responses, same group split both passes) at ~5.8x the speed
+(~2m48s vs ~16m14s for the same task). It replaced an AWQ-int4 build
+previously served under this same id, which showed reproducible coherence
+failures (garbled/empty/off-task/hallucinated output) on dense self-
+referential content -- root-caused to the int4 quantization via a live
+A/B against this Q6 build on the identical failing input, and the AWQ
+deployment has since been fully retired (catalog entry and wrapper
+deleted, unreachable under any id). Also answers to the alias
+`summariser`."""
 DEFAULT_API_KEY = "local"
 
 MODEL_CONTEXT_WINDOWS = {
@@ -23,15 +36,16 @@ MODEL_CONTEXT_WINDOWS = {
 }
 """Real windows per llama-swap's own /v1/models listing on titan:8080, not
 a nominal/marketing figure -- gemma-4-12b was reconfigured from 64k to
-128k ("Gemma 4 native max") after this constant was first written; re-
-check the live listing before trusting these if the deployment might have
-changed again. qwen3.8-27b-fast is the same weights as qwen3.8-27b with
-~2x faster decode via speculative decoding, but its MTP draft buffers only
-fit at half the main model's window (128K, not 262K). qwen3.5-9b (AWQ-4bit
-on vLLM) is a smaller, purpose-described "summarisation, extraction, long-
-context chat" model at the full 262144 window, ~126 tok/s single-session
--- the best current fit for this tool's actual workload, worth preferring
-over the 27B unless quality comparison says otherwise."""
+128k ("Gemma 4 native max") after this constant was first written, and
+qwen3.5-9b itself was cut over from an AWQ-int4 build to a Q6 GGUF build
+under the same id (see DEFAULT_MODEL) -- re-check the live listing before
+trusting any of these if the deployment might have changed again.
+qwen3.8-27b-fast is the same weights as qwen3.8-27b with ~2x faster decode
+via speculative decoding, but its MTP draft buffers only fit at half the
+main model's window (128K, not 262K). qwen3.5-9b is single-stream only
+(one shared KV pool, not N concurrent slots), which matches how this tool
+already calls it (multi-pass runs sequentially, never fans out concurrent
+in-flight requests), so no retuning needed on this side."""
 
 MODELS_WITH_THINKING_TOGGLE = {"qwen3.8-27b", "qwen3.8-27b-fast", "qwen3.8-27b-vllm"}
 """Models where client.py should send extra_body.chat_template_kwargs.
@@ -46,15 +60,17 @@ llama-swap model description, which explicitly documents this exact
 mechanism ("disable per-request with chat_template_kwargs.enable_thinking
 =false") -- not directly load-tested here either.
 
-qwen3.5-9b (vLLM/AWQ-4bit) is deliberately EXCLUDED, confirmed harmful: it
-never emits a thinking block either way (content blocks are ['text'] with
-or without the override), and sending the override anyway is not free --
-a real side-by-side test with an identical prompt measured 147.4s with the
-override vs 3.4s without it for the exact same output (input_tokens=1416,
-output_tokens=400 both times), ~43x slower for zero behavioral difference.
-gemma-4-12b/gemma-4-e4b are untested for this specific latency effect and
-are deliberately left off this set until checked, rather than assumed
-safe."""
+qwen3.5-9b (now the Q6 GGUF build, see DEFAULT_MODEL) has reasoning off by
+default per its own model description and is deliberately left off this
+set -- no evidence it needs toggling. The now-retired AWQ-int4 build
+previously served under this id was confirmed harmful to send the
+override to (never emitted a thinking block either way, but the override
+cost ~43x latency for identical output in a real side-by-side test:
+147.4s vs 3.4s for the same input_tokens=1416/output_tokens=400) -- worth
+remembering as a general lesson (an unneeded chat-template override is not
+free on every backend) even though the specific model it applied to is
+gone. gemma-4-12b/gemma-4-e4b are untested for this latency effect and are
+deliberately left off this set until checked, rather than assumed safe."""
 
 FALLBACK_CONTEXT_WINDOW = 32768
 CONTEXT_BUDGET_FRACTION = 0.75
