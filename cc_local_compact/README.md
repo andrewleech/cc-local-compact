@@ -4,6 +4,28 @@ Replicates Claude Code's `/compact` context-summarization against an external, l
 
 Written from a full reverse-engineering pass on Claude Code 2.1.252's `/compact`, documented in `docs/compact-architecture.md` in the `cc-patcher` repo. Every module here is a deliberately mechanical port of the corresponding function(s) documented there, so the mapping stays auditable against the original minified source.
 
+## Quick start
+
+```bash
+pip install -e .[dev]
+# or, as an installed CLI tool:
+uv tool install /path/to/cc-local-compact
+```
+
+```bash
+cc-local-compact list      # session transcripts for the current project
+cc-local-compact compact   # resolves the session automatically, or prompts if more than one candidate exists
+```
+
+To recover context after typing `/clear` in a live Claude Code session:
+
+```bash
+cc-local-compact register   # one-time: installs the bare /remind command + its hook into ~/.claude
+```
+then, in any Claude Code session: `/clear`, then `/remind`. See "Recovering after a manual `/clear`" below for how and why.
+
+Register as an MCP server via `.mcp.json` to expose `compact_session`/`list_sessions` as tools inside a Claude Code session (see the example `.mcp.json` in the top-level `cc-local-compact/` repo).
+
 ## Why a local model needs this
 
 The real `/compact` discovers Claude's context limit reactively, via live API errors, because Claude's window is large enough that this rarely happens more than once or twice. A local model (Qwen3.8, Gemma-4, ...) has a much smaller window, so this tool proactively sizes each summarization batch against a configured `context_budget` before ever calling the model, and keeps the real app's reactive retry/backoff as a safety net for when the token estimate is wrong.
@@ -83,14 +105,6 @@ Since this env var is undocumented and internal, treat it as liable to change ac
 - failing that, a condensed, one-line, terminal-width-truncated snippet of the last visible message on the transcript's main thread (text content only -- no tool calls/results/thinking) -- what a person would actually see on screen at the end of that session.
 
 `compact_session` (the MCP tool) returns `{"ok": false, "reason": "ambiguous_session", "candidates": [...]}` without compacting anything in this case -- the calling agent has to look at the candidates and re-call with `session_path` set explicitly (or call `list_sessions` first, which returns the same enriched candidate list). `cc-local-compact compact` (the CLI) instead prompts interactively: it prints the numbered, display-named candidate list and reads a selection from stdin, refusing to guess there either; if stdin isn't a terminal (e.g. run from a script) it prints the same list and exits non-zero instead of hanging on `input()`.
-
-## Quick start
-
-```bash
-pip install -e .[dev]
-cc-local-compact list      # session transcripts for the current project
-cc-local-compact compact   # resolves the session automatically, or prompts if more than one candidate exists
-```
 
 ## Configuration
 

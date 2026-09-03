@@ -9,7 +9,26 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import discovery, register, response, server, transcript
+from . import discovery, register, response, transcript
+
+# `server` (and the anthropic/fastmcp/authlib stack it pulls in) is
+# imported lazily, only by the subcommands that actually run a
+# compaction (compact, serve, and remind-hook once it's past its
+# fast-fail checks) -- register/unregister/list/remind-hook's common
+# "nothing to recover" case have no need for it, and that stack is slow
+# to import and noisy (fastmcp pulls in authlib, which currently emits
+# AuthlibDeprecationWarning on import -- not this project's bug to fix,
+# but no reason to pay for it or show it on every /remind invocation
+# that doesn't even reach a real compaction call).
+
+
+def _import_server():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", module=r"authlib(\..*)?")
+        from . import server
+    return server
 
 
 def _prompt_for_session(candidates: list[dict]) -> Path | None:
@@ -65,6 +84,7 @@ def _cmd_compact(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         trigger = "remind"
 
+    server = _import_server()
     result = server._run_compaction(
         session_path,
         args.custom_instructions,
@@ -88,7 +108,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
 
 
 def _cmd_serve(_args: argparse.Namespace) -> None:
-    server.main()
+    _import_server().main()
 
 
 def _remind_hook_text(payload: dict) -> str:
@@ -115,6 +135,7 @@ def _remind_hook_text(payload: dict) -> str:
         if error == "empty_pre_clear_span":
             return "/remind: nothing to recover -- /clear was the first thing since the previous /clear (or session start)."
 
+        server = _import_server()
         result = server._run_compaction(
             session_path, None, None, None, None, None, False, None,
             lines=span, trigger="remind", logical_parent_uuid_override=span[-1].get("uuid"),
