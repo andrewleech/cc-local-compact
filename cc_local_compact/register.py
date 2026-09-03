@@ -43,11 +43,23 @@ hooks are enabled; otherwise just continue.
 HOOK_SPECS = [
     {
         "event": "UserPromptExpansion", "matcher": COMMAND_NAME, "args": ["remind-hook"],
+        # NOTE: confirmed in the binary that statusMessage's live-spinner
+        # display is hard-gated to Stop/SubagentStop hook events only (a
+        # dedicated filter function checks hookEvent against exactly those
+        # two) -- it's inert for UserPromptExpansion, kept only in case
+        # Claude Code adds support for it later.
         "statusMessage": (
             "Recovering context from before your last /clear (runs a real "
             "compaction pass against the local model -- can take several "
             "minutes on a large session)..."
         ),
+        # Real compaction runs on a large session have been benchmarked at
+        # up to ~16 minutes (see cc_local_compact/README.md); the default
+        # hook timeout is 600s (10 min). Confirmed live: a real /remind run
+        # was killed by hitting that default, silently falling back to the
+        # command's own markdown body as if the hook had never run at all.
+        # 3600s gives real headroom even under backend contention.
+        "timeout": 3600,
     },
     {"event": "Stop", "matcher": None, "args": ["track-session"]},
 ]
@@ -108,15 +120,20 @@ def register(claude_home: Path | None = None, executable: str | None = None) -> 
             (h for h in matcher_entry["hooks"] if h.get("command") == executable and h.get("args") == spec["args"]),
             None,
         )
+        optional_fields = ("statusMessage", "timeout")
         if existing_hook is None:
             new_hook = {"type": "command", "command": executable, "args": spec["args"]}
-            if "statusMessage" in spec:
-                new_hook["statusMessage"] = spec["statusMessage"]
+            for field in optional_fields:
+                if field in spec:
+                    new_hook[field] = spec[field]
             matcher_entry["hooks"].append(new_hook)
-        elif "statusMessage" in spec and existing_hook.get("statusMessage") != spec["statusMessage"]:
-            # re-registering after an upgrade -- refresh a changed statusMessage
-            # on an already-installed hook rather than leaving it stale.
-            existing_hook["statusMessage"] = spec["statusMessage"]
+        else:
+            # re-registering after an upgrade -- refresh any changed
+            # optional field on an already-installed hook rather than
+            # leaving it stale.
+            for field in optional_fields:
+                if field in spec and existing_hook.get(field) != spec[field]:
+                    existing_hook[field] = spec[field]
         hooks_already_present[spec["event"]] = existing_hook is not None
 
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")

@@ -28,7 +28,8 @@ def test_register_creates_settings_json_with_both_hooks(tmp_path):
     remind_hook = upe_entries[0]["hooks"][0]
     assert remind_hook["command"] == EXECUTABLE
     assert remind_hook["args"] == ["remind-hook"]
-    assert remind_hook["statusMessage"]  # non-empty -- shown in the spinner while the hook runs
+    assert remind_hook["statusMessage"]  # non-empty (currently inert for this event type, see register.py)
+    assert remind_hook["timeout"] > 600  # must exceed the 600s default -- a real compaction can take longer
 
     stop_entries = settings["hooks"]["Stop"]
     assert len(stop_entries) == 1
@@ -106,6 +107,23 @@ def test_register_refreshes_stale_status_message_on_already_installed_hook(tmp_p
     # still only one hook entry -- updated in place, not duplicated
     assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
     assert result["hooks_already_present"]["UserPromptExpansion"] is True
+
+
+def test_register_refreshes_stale_timeout_on_already_installed_hook(tmp_path):
+    home = tmp_path / "claude_home"
+    register.register(home, executable=EXECUTABLE)
+
+    settings_path = home / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["hooks"]["UserPromptExpansion"][0]["hooks"][0]["timeout"] = 60  # simulate an older, too-short install
+    settings_path.write_text(json.dumps(settings))
+
+    register.register(home, executable=EXECUTABLE)
+
+    settings = json.loads(settings_path.read_text())
+    current_timeout = settings["hooks"]["UserPromptExpansion"][0]["hooks"][0]["timeout"]
+    assert current_timeout == register.HOOK_SPECS[0]["timeout"]
+    assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
 
 
 def test_unregister_removes_command_file_and_both_hooks(tmp_path):
