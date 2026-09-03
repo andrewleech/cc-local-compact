@@ -44,15 +44,28 @@ What appending *is* confirmed to do: it's safe. Directly tested against a live t
 
 ## Recovering after a manual `/clear`
 
-Nothing external can trigger the real client's own `/clear`/`/compact`, or make it send less to the model on a future turn -- see "Output" above for the confirmed test of that. `/clear` itself is free (no model call) and doesn't rotate the session file or ID -- confirmed by inspecting a real transcript containing one: it's recorded in-place as an ordinary `type:"user"` line, and the `parentUuid` chain runs straight across it unbroken. So the only usable "compact and continue" pattern is: a human runs `/clear` themselves, then the freshly-cleared agent calls `continue_after_clear` to recover a summary of what came before, in the same session file.
+Nothing external can trigger the real client's own `/clear`/`/compact`, or make it send less to the model on a future turn -- see "Output" above for the confirmed test of that. `/clear` itself is free (no model call) and doesn't rotate the session file or ID -- confirmed by inspecting a real transcript containing one: it's recorded in-place as an ordinary `type:"user"` line, and the `parentUuid` chain runs straight across it unbroken. So the only usable "compact and continue" pattern is: a human runs `/clear` themselves, then types `/remind` -- a bare, user-level slash command this package installs -- to recover a summary of what came before, in the same session file.
+
+`/remind` is deliberately **not** an MCP tool and **not** a Claude Code plugin. An MCP tool would need the freshly-cleared agent to be told to call it, which isn't reliable enough to build around. A plugin-provided command is always invoked namespaced (`/plugin-name:command-name`, confirmed against the installed Claude Code binary) -- there's no way to get a short bare name from one. `/continue` and `/recap`, the two obvious short names, are also both permanently unavailable regardless of packaging: `/continue` is a built-in alias of `/resume`, and `/recap` is its own distinct builtin (`"Generate a one-line session recap now"`) -- Claude Code checks any custom command against the full builtin name+alias set and marks a collision "unavailable". `remind` isn't in that set.
+
+So `/remind` is installed as a plain user-level command (`~/.claude/commands/remind.md`, run `cc-local-compact register` to install it -- see below), which *is* invoked bare and applies to every project automatically. Its actual work happens in a `UserPromptExpansion` hook (`cc-local-compact remind-hook`, matched to the command name `remind`) -- also installed by `register`, into `~/.claude/settings.json`. This hook event fires specifically when that named command is typed, never on a bare `/clear` and never on anything else. Its input carries `session_id`/`transcript_path`/`cwd` directly (no MCP env-var trick needed at all), and its output supports injecting `additionalContext` straight into the model's next turn with `suppressOriginalPrompt: true` -- so the compaction runs synchronously in the hook itself, with **no agent tool-call and no dependency on the model "remembering" to do anything**.
 
 `/clear` is detected differently from `/rename` (see "Which session gets compacted" above): it's a `type:"user"` line whose `message.content` is the literal `<command-name>/clear</command-name>...` tag string, not a `type:"system",subtype:"local_command"` line. `discovery.find_clear_indices` returns every such line's index on the transcript's live main thread (via `transcript.load_transcript`, so an abandoned branch's stale `/clear` -- e.g. orphaned by a later rewind -- is correctly ignored, same principle as `describe_session`'s rename handling; confirmed against two real sessions where exactly this happened).
 
-Because `/clear` doesn't break the `parentUuid` chain, the full session history is still reachable no matter how many times it's been cleared -- summarizing everything before the *last* `/clear` would re-summarize spans an earlier `continue_after_clear` call already returned. So only the span since the *previous* `/clear` (or since session start, for the first one) gets summarized. No `/clear` on the live thread at all returns `{"ok": false, "reason": "no_clear_boundary_found", ...}`; an empty span (`/clear` was the first thing since the prior boundary) returns `{"ok": false, "reason": "empty_pre_clear_span", ...}` -- neither silently falls back to summarizing the whole transcript.
+Because `/clear` doesn't break the `parentUuid` chain, the full session history is still reachable no matter how many times it's been cleared -- summarizing everything before the *last* `/clear` would re-summarize spans an earlier `/remind` already returned. `discovery.slice_since_last_clear` handles this: only the span since the *previous* `/clear` (or since session start, for the first one) gets summarized. No `/clear` on the live thread at all, or an empty span, degrades to a short explanatory `additionalContext` rather than silently falling back to summarizing the whole transcript or crashing the hook.
 
-Unlike `compact_session`, whose `summary` field is the bare cleaned text (that tool's caller/purpose is heterogeneous -- archival, review, handoff to a different session), `continue_after_clear`'s `summary` field is wrapped in `response.build_resume_preamble`'s "resume directly, don't acknowledge, don't ask questions" framing. This tool is only ever called by an agent that was just cleared and must resume acting, and its `tool_result` lands in exactly the position a real injected `isCompactSummary` message would -- there's no other channel for that framing to reach the agent through. The bare cleaned text is still available as `summary_cleaned`.
+The hook's `additionalContext` is wrapped in `response.build_resume_preamble`'s "resume directly, don't acknowledge, don't ask questions" framing -- unlike `compact_session`'s `summary` field, which stays bare (that tool's caller/purpose is heterogeneous: archival, review, handoff to a different session, where "resume directly" framing would be wrong). `/remind` has no such ambiguity: it only ever fires right after a deliberate `/clear`, and its output lands in exactly the position a real injected `isCompactSummary` message would.
 
 The CLI's `compact --before-last-clear` flag exercises the same slicing outside a live session, for dry-running -- it does not apply the resume-framed wrapping, since there's no live agent there to read it.
+
+### Installing `/remind`
+
+```bash
+uv tool install /home/corona/cc-local-compact   # local path install; not published to PyPI
+cc-local-compact register                       # installs ~/.claude/commands/remind.md + the UserPromptExpansion hook
+```
+
+`register` is idempotent (safe to re-run) and only ever adds to `~/.claude/settings.json`'s `hooks` -- existing hooks from anything else (e.g. this same user's `claude-net` `PreCompact`/`PostCompact` hooks) are left untouched. `cc-local-compact unregister` removes only what `register` added. Both accept `--claude-home` to target a different directory (used by this project's own tests, never the real `~/.claude`).
 
 ## Backend
 
@@ -105,10 +118,11 @@ cc_local_compact/
   fallback.py              composes a primary+fallback model pair into one SummarizeFn
   markdown_out.py            output file structure/writer
   jsonl_append.py              optional: append a compact_boundary to the session's own JSONL
-  discovery.py                   cwd -> project-dir slug -> session (via CLAUDE_CODE_SESSION_ID or interactive/agent disambiguation), plus /clear-boundary detection for continue_after_clear
-  server.py                         FastMCP tool surface (stdio)
-  cli.py                               standalone CLI
-config.py                                environment-variable resolution
+  discovery.py                   cwd -> project-dir slug -> session (via CLAUDE_CODE_SESSION_ID or interactive/agent disambiguation), plus /clear-boundary detection
+  register.py                       installs/removes the /remind command + hook into ~/.claude
+  server.py                            FastMCP tool surface (stdio): compact_session, list_sessions
+  cli.py                                  standalone CLI: compact, list, serve, register, unregister, remind-hook
+config.py                                     environment-variable resolution
 ```
 
 ## Known deviations from the source

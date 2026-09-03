@@ -8,6 +8,8 @@ See `cc_local_compact/README.md` for the full description, configuration, and fi
 
 ```bash
 pip install -e .[dev]
+# or, as an installed CLI tool:
+uv tool install /path/to/cc-local-compact
 ```
 
 ## Use
@@ -17,6 +19,9 @@ cc-local-compact list                           # session transcripts for the cu
 cc-local-compact compact                        # compact the current session (see "Which session gets compacted" below)
 cc-local-compact compact path/to/session.jsonl   # compact a specific session
 cc-local-compact serve                           # run as an MCP stdio server
+cc-local-compact register                        # install the bare /remind command + hook into ~/.claude (see below)
 ```
 
-Register as an MCP server via `.mcp.json` (see the example in this repo) to expose `compact_session`/`continue_after_clear`/`list_sessions` as tools inside a Claude Code session.
+Register as an MCP server via `.mcp.json` (see the example in this repo) to expose `compact_session`/`list_sessions` as tools inside a Claude Code session.
+
+`/remind` (installed by `cc-local-compact register`) is the way to recover context after typing `/clear` in a live session -- it's a plain user-level slash command + hook, deliberately not an MCP tool or a plugin. See `cc_local_compact/README.md`, "Recovering after a manual `/clear`", for why.

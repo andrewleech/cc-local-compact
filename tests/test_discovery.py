@@ -284,3 +284,60 @@ def test_find_clear_indices_ignores_non_user_lines():
         "message": {"content": "<command-name>/clear</command-name>"},
     }]
     assert discovery.find_clear_indices(lines) == []
+
+
+def _turn(label: str) -> list[dict]:
+    return [
+        {"type": "user", "uuid": f"u_{label}", "message": {"content": f"turn {label}"}},
+        {"type": "assistant", "uuid": f"a_{label}", "message": {"content": f"reply {label}", "id": f"m_{label}"}},
+    ]
+
+
+def test_slice_since_last_clear_no_clear_at_all():
+    lines = _turn("a")
+    span, error = discovery.slice_since_last_clear(lines)
+    assert span is None
+    assert error == "no_clear_boundary_found"
+
+
+def test_slice_since_last_clear_single_clear_takes_everything_before_it():
+    lines = _turn("a") + [_clear_line("c1")] + _turn("post")
+    span, error = discovery.slice_since_last_clear(lines)
+    assert error is None
+    assert span == _turn("a")
+
+
+def test_slice_since_last_clear_uses_span_since_previous_clear_not_whole_history():
+    lines = _turn("a") + [_clear_line("c1")] + _turn("b") + [_clear_line("c2")] + _turn("post")
+    span, error = discovery.slice_since_last_clear(lines)
+    assert error is None
+    # +1: includes clear1's own line index in the slice start boundary math,
+    # not clear1's line itself -- span starts right after it
+    assert span == _turn("b")
+
+
+def test_slice_since_last_clear_empty_when_clear_is_first_since_previous_clear():
+    lines = [_clear_line("c1")] + _turn("post")
+    span, error = discovery.slice_since_last_clear(lines)
+    assert span is None
+    assert error == "empty_pre_clear_span"
+
+
+def test_slice_since_last_clear_empty_between_two_adjacent_clears():
+    lines = _turn("a") + [_clear_line("c1")] + [_clear_line("c2")] + _turn("post")
+    span, error = discovery.slice_since_last_clear(lines)
+    assert span is None
+    assert error == "empty_pre_clear_span"
+
+
+def _clear_line(uuid: str) -> dict:
+    return {
+        "type": "user", "uuid": uuid,
+        "message": {
+            "content": (
+                "<command-name>/clear</command-name>\n            "
+                "<command-message>clear</command-message>\n            "
+                "<command-args></command-args>"
+            ),
+        },
+    }

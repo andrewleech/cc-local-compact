@@ -172,7 +172,7 @@ def find_clear_indices(lines: list[dict]) -> list[int]:
     chain or start a new session file (confirmed against a real transcript
     containing one), so a caller wanting only the span since the most
     recent /clear must use the last two entries here, not just the last
-    one -- see continue_after_clear in server.py."""
+    one -- see slice_since_last_clear below."""
     indices = []
     for i, line in enumerate(lines):
         if line.get("type") != "user":
@@ -181,6 +181,30 @@ def find_clear_indices(lines: list[dict]) -> list[int]:
         if isinstance(content, str) and _CLEAR_MARKER in content:
             indices.append(i)
     return indices
+
+
+def slice_since_last_clear(lines: list[dict]) -> tuple[list[dict] | None, str | None]:
+    """(span, None) on success -- the transcript span since the previous
+    /clear (or session start, for the first one), i.e. everything before
+    the LAST /clear that hasn't already been recovered by an earlier
+    call. Not everything before the last /clear: since /clear doesn't
+    break the parentUuid chain, the full history is still reachable no
+    matter how many times a session has been cleared, so summarizing
+    everything before the last /clear would re-summarize spans an earlier
+    call already returned.
+
+    (None, "no_clear_boundary_found") if there's no /clear on the live
+    thread at all. (None, "empty_pre_clear_span") if that span is empty
+    (the last /clear was the first thing since the one before it, or
+    since session start)."""
+    indices = find_clear_indices(lines)
+    if not indices:
+        return None, "no_clear_boundary_found"
+    start = indices[-2] + 1 if len(indices) > 1 else 0
+    span = lines[start:indices[-1]]
+    if not span:
+        return None, "empty_pre_clear_span"
+    return span, None
 
 
 def list_sessions(cwd: Path, claude_home: Path | None = None) -> list[dict]:

@@ -1,5 +1,7 @@
 """Standalone CLI for running the compaction pipeline outside an MCP
-client, useful for development and debugging."""
+client, and for installing/running the /remind command + hook (see
+register.py and cc_local_compact/README.md, "Recovering after a manual
+/clear")."""
 
 import argparse
 import json
@@ -7,7 +9,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import discovery, server, transcript
+from . import discovery, register, response, server, transcript
 
 
 def _prompt_for_session(candidates: list[dict]) -> Path | None:
@@ -53,22 +55,15 @@ def _cmd_compact(args: argparse.Namespace) -> None:
     trigger = "manual"
     if args.before_last_clear:
         all_lines = transcript.load_transcript(session_path)
-        clear_indices = discovery.find_clear_indices(all_lines)
-        if not clear_indices:
+        lines_override, error = discovery.slice_since_last_clear(all_lines)
+        if error is not None:
             print(json.dumps({
-                "ok": False, "reason": "no_clear_boundary_found",
-                "detail": "no /clear command found on this session's main thread",
+                "ok": False, "reason": error,
+                "detail": "no /clear command found on this session's main thread" if error == "no_clear_boundary_found"
+                else "nothing to summarize before the session's last /clear (since the previous /clear, or session start)",
             }))
             raise SystemExit(1)
-        span_start = clear_indices[-2] + 1 if len(clear_indices) > 1 else 0
-        lines_override = all_lines[span_start:clear_indices[-1]]
-        if not lines_override:
-            print(json.dumps({
-                "ok": False, "reason": "empty_pre_clear_span",
-                "detail": "nothing to summarize before the session's last /clear (since the previous /clear, or session start)",
-            }))
-            raise SystemExit(1)
-        trigger = "continue_after_clear"
+        trigger = "remind"
 
     result = server._run_compaction(
         session_path,
@@ -94,6 +89,71 @@ def _cmd_list(args: argparse.Namespace) -> None:
 
 def _cmd_serve(_args: argparse.Namespace) -> None:
     server.main()
+
+
+def _remind_hook_text(payload: dict) -> str:
+    """Body of the /remind UserPromptExpansion hook: never raises -- any
+    failure degrades to an explanatory string, since the hook's own
+    contract (see _cmd_remind_hook) always emits valid JSON regardless of
+    what happens here."""
+    try:
+        transcript_path = payload.get("transcript_path")
+        session_path = Path(transcript_path) if transcript_path and Path(transcript_path).is_file() else None
+        if session_path is None:
+            cwd = Path(payload["cwd"]) if payload.get("cwd") else discovery.resolve_cwd()
+            session_path, _resolution_meta = discovery.resolve_session(None, cwd)
+        if session_path is None:
+            return "/remind: no session transcript could be resolved -- nothing recovered."
+
+        all_lines = transcript.load_transcript(session_path)
+        span, error = discovery.slice_since_last_clear(all_lines)
+        if error == "no_clear_boundary_found":
+            return (
+                "/remind: no /clear command found on this session's thread -- "
+                "there's nothing pre-/clear to recover yet."
+            )
+        if error == "empty_pre_clear_span":
+            return "/remind: nothing to recover -- /clear was the first thing since the previous /clear (or session start)."
+
+        result = server._run_compaction(
+            session_path, None, None, None, None, None, False, None,
+            lines=span, trigger="remind", logical_parent_uuid_override=span[-1].get("uuid"),
+        )
+        if not result.get("ok"):
+            return f"/remind: couldn't recover a summary -- {result.get('detail') or result.get('reason')}"
+        return response.build_resume_preamble(result["summary"], transcript_path=str(session_path))
+    except Exception as error:
+        return f"/remind: recovery failed unexpectedly -- {error}"
+
+
+def _cmd_remind_hook(_args: argparse.Namespace) -> None:
+    """UserPromptExpansion hook body for /remind (installed by `register`).
+    Reads the hook's JSON input from stdin, always prints exactly one
+    hookSpecificOutput JSON line and exits 0 -- a malformed/failed
+    recovery degrades to an explanatory additionalContext, never a crash
+    or non-JSON output reaching Claude Code."""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    text = _remind_hook_text(payload)
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptExpansion",
+            "additionalContext": text,
+            "suppressOriginalPrompt": True,
+        },
+    }))
+
+
+def _cmd_register(args: argparse.Namespace) -> None:
+    result = register.register(Path(args.claude_home) if args.claude_home else None)
+    print(json.dumps(result, indent=2))
+
+
+def _cmd_unregister(args: argparse.Namespace) -> None:
+    result = register.unregister(Path(args.claude_home) if args.claude_home else None)
+    print(json.dumps(result, indent=2))
 
 
 def main() -> None:
@@ -122,12 +182,11 @@ def main() -> None:
             "Summarize only the span before the session's last /clear command "
             "(since the previous /clear if there was one, else since session "
             "start) instead of the whole transcript -- exercises the same "
-            "slicing continue_after_clear (MCP tool) uses, for dry-running "
+            "slicing the /remind hook (see `register`) uses, for dry-running "
             "outside a live session. Fails with reason 'no_clear_boundary_found' "
             "if the session has no /clear, or 'empty_pre_clear_span' if there's "
-            "nothing in that span. Does not apply continue_after_clear's "
-            "resume-framed summary wrapping -- there's no live agent here to "
-            "read it."
+            "nothing in that span. Does not apply /remind's resume-framed "
+            "summary wrapping -- there's no live agent here to read it."
         ),
     )
     compact_parser.set_defaults(func=_cmd_compact)
@@ -138,6 +197,23 @@ def main() -> None:
 
     serve_parser = subparsers.add_parser("serve", help="Run the MCP stdio server")
     serve_parser.set_defaults(func=_cmd_serve)
+
+    remind_hook_parser = subparsers.add_parser(
+        "remind-hook", help="UserPromptExpansion hook body for /remind (installed by `register`, not run directly)",
+    )
+    remind_hook_parser.set_defaults(func=_cmd_remind_hook)
+
+    register_parser = subparsers.add_parser(
+        "register", help="Install the bare /remind command + its UserPromptExpansion hook into ~/.claude",
+    )
+    register_parser.add_argument("--claude-home", default=None, help="Override ~/.claude (for testing)")
+    register_parser.set_defaults(func=_cmd_register)
+
+    unregister_parser = subparsers.add_parser(
+        "unregister", help="Remove the /remind command + hook installed by `register`",
+    )
+    unregister_parser.add_argument("--claude-home", default=None, help="Override ~/.claude (for testing)")
+    unregister_parser.set_defaults(func=_cmd_unregister)
 
     args = parser.parse_args()
     args.func(args)
