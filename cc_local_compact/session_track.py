@@ -22,14 +22,22 @@ window right after a /clear -- before that new session has completed its
 own first turn -- is exactly the moment /remind needs to ask "what was
 current a moment ago".
 
-Registered hooks MUST use the `args` form (executable + argument list,
-not a single shell command string) for this to work: confirmed live (by
-walking /proc's parent chain from a running hook subprocess) that `args`
-form spawns the hook as a DIRECT child of the real `claude` process, so
-os.getppid() from inside the hook reliably gives that process's own,
-stable PID -- immune to the "multiple sessions open on one project"
-problem a timestamp-proximity heuristic would have had, since each
-window's PID is a real, unambiguous OS-level identity, not a guess.
+Registered hooks use the `args` form (executable + argument list, not a
+single shell command string): confirmed live (by walking /proc's parent
+chain from a running hook subprocess) that this spawns a hook as a
+DIRECT child of the real `claude` process in most cases, so
+os.getppid() from inside the hook usually gives that process's own,
+stable PID directly -- immune to the "multiple sessions open on one
+project" problem a timestamp-proximity heuristic would have had, since
+each window's PID is a real, unambiguous OS-level identity, not a guess.
+
+Not always, though: real testing found a case where the Stop hook
+reliably recorded the right PID directly while a UserPromptExpansion
+hook in the very same process did not -- some invocation path spawns a
+hook under an extra process layer rather than as `claude`'s direct
+child. find_tracked_pid/predecessor_session compensate on the read side
+by walking the caller's own ancestry chain and using whichever PID
+already has tracked state, rather than trusting os.getppid() alone.
 
 State lives under /tmp (namespaced per uid), not ~/.claude -- it's
 process-lifetime scratch data, not durable configuration; losing it
@@ -40,10 +48,27 @@ after every turn, and most of those calls are the same session_id as
 last time.
 """
 
+import datetime
 import json
 import os
 import tempfile
 from pathlib import Path
+
+
+def log(message: str, state_dir: Path | None = None) -> None:
+    """Append one timestamped line to hook.log, next to the tracking
+    files -- for seeing what a live hook run actually did (pid
+    resolution, ancestry walk, predecessor found or not, compaction
+    start/end) without needing to reconstruct it from a real transcript
+    after the fact. Never raises: a logging failure must not break the
+    hook it's instrumenting."""
+    try:
+        path = (state_dir or _state_dir()) / "hook.log"
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        with path.open("a") as f:
+            f.write(f"{timestamp} pid={os.getpid()} {message}\n")
+    except OSError:
+        pass
 
 
 def _state_dir() -> Path:
@@ -97,9 +122,54 @@ def record_turn(
     tmp_path.replace(path)
 
 
-def predecessor_session(pid: int, my_session_id: str, state_dir: Path | None = None) -> dict | None:
+def _read_ppid(pid: int) -> int | None:
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("PPid:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _ancestor_chain(start_pid: int, max_levels: int = 10, ppid_of=_read_ppid) -> list[int]:
+    chain = [start_pid]
+    pid = start_pid
+    for _ in range(max_levels):
+        parent = ppid_of(pid)
+        if parent is None or parent <= 1 or parent in chain:
+            break
+        chain.append(parent)
+        pid = parent
+    return chain
+
+
+def find_tracked_pid(
+    start_pid: int, state_dir: Path | None = None, max_levels: int = 10, ppid_of=_read_ppid,
+) -> int | None:
+    """Real evidence (a Stop hook that reliably records the right PID
+    directly, paired with a UserPromptExpansion hook that sometimes
+    doesn't) shows a hook can occasionally be spawned under an extra
+    process layer rather than as a direct child of the real `claude`
+    process, even when registered with the `args` form. Rather than try
+    to identify "the real claude process" by name (fragile -- varies by
+    install, e.g. a patched binary), walk the ancestry chain from
+    `start_pid` upward and use the first PID that already has tracked
+    state on disk: Stop already proved that PID is the one being written
+    to, whatever spawned this particular hook invocation."""
+    for pid in _ancestor_chain(start_pid, max_levels, ppid_of):
+        if _marker_path(pid, state_dir).is_file():
+            return pid
+    return None
+
+
+def predecessor_session(
+    pid: int, my_session_id: str, state_dir: Path | None = None, ppid_of=_read_ppid,
+) -> dict | None:
     """The session that was active in this same process right before
-    `my_session_id` -- or None if nothing was ever tracked for this PID.
+    `my_session_id` -- or None if nothing was ever tracked anywhere in
+    `pid`'s own ancestry (see find_tracked_pid).
 
     If `current` already reflects `my_session_id`, at least one Stop
     event has already fired for this (post-clear) session, so record_turn
@@ -108,11 +178,11 @@ def predecessor_session(pid: int, my_session_id: str, state_dir: Path | None = N
     one yet (the common case: /remind called right after /clear, before
     any new turn completed) -- the answer is `current` itself, not
     `previous` (which would be one session too old)."""
-    path = _marker_path(pid, state_dir)
-    if not path.is_file():
+    tracked_pid = find_tracked_pid(pid, state_dir, ppid_of=ppid_of)
+    if tracked_pid is None:
         return None
     try:
-        marker = json.loads(path.read_text())
+        marker = json.loads(_marker_path(tracked_pid, state_dir).read_text())
     except (json.JSONDecodeError, OSError):
         return None
 

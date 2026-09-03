@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -126,9 +127,13 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
     than any file-boundary or timing heuristic -- immune to "more than
     one session open on this project" ambiguity, since PID is per-window,
     not per-project."""
+    session_track.log(f"remind-hook: start ppid={pid} session_id={payload.get('session_id')!r}")
     try:
         my_session_id = payload.get("session_id")
+        tracked_pid = session_track.find_tracked_pid(pid) if my_session_id else None
+        session_track.log(f"remind-hook: find_tracked_pid({pid}) -> {tracked_pid}")
         predecessor = session_track.predecessor_session(pid, my_session_id) if my_session_id else None
+        session_track.log(f"remind-hook: predecessor = {predecessor}")
         if predecessor is None:
             return (
                 "/remind: no predecessor session tracked for this window -- "
@@ -138,16 +143,22 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
 
         session_path = Path(predecessor["transcript_path"])
         if not session_path.is_file():
+            session_track.log(f"remind-hook: predecessor file missing: {session_path}")
             return f"/remind: predecessor session file no longer exists ({session_path})."
 
+        session_track.log(f"remind-hook: starting compaction of {session_path}")
+        start = time.monotonic()
         server = _import_server()
         result = server._run_compaction(
             session_path, None, None, None, None, None, False, None, trigger="remind",
         )
+        elapsed = time.monotonic() - start
+        session_track.log(f"remind-hook: compaction finished in {elapsed:.1f}s ok={result.get('ok')} reason={result.get('reason')}")
         if not result.get("ok"):
             return f"/remind: couldn't recover a summary -- {result.get('detail') or result.get('reason')}"
         return response.build_resume_preamble(result["summary"], transcript_path=str(session_path))
     except Exception as error:
+        session_track.log(f"remind-hook: unexpected error: {error!r}")
         return f"/remind: recovery failed unexpectedly -- {error}"
 
 
@@ -162,6 +173,7 @@ def _cmd_remind_hook(_args: argparse.Namespace) -> None:
     except json.JSONDecodeError:
         payload = {}
     text = _remind_hook_text(payload, os.getppid())
+    session_track.log(f"remind-hook: emitting additionalContext ({len(text)} chars): {text[:200]!r}")
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptExpansion",
@@ -183,10 +195,11 @@ def _cmd_track_session(_args: argparse.Namespace) -> None:
         session_id = payload.get("session_id")
         transcript_path = payload.get("transcript_path")
         cwd = payload.get("cwd")
+        session_track.log(f"track-session: ppid={os.getppid()} session_id={session_id!r} transcript_path={transcript_path!r}")
         if session_id and transcript_path:
             session_track.record_turn(os.getppid(), session_id, transcript_path, cwd or "")
-    except Exception:
-        pass
+    except Exception as error:
+        session_track.log(f"track-session: unexpected error: {error!r}")
     print("{}")
 
 
