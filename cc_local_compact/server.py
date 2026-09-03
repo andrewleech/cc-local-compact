@@ -27,13 +27,26 @@ def _run_compaction(
     fallback_model: str | None = None,
     append_to_jsonl: bool = False,
     resolution_meta: dict | None = None,
+    lines: list[dict] | None = None,
+    trigger: str = "manual",
+    logical_parent_uuid_override: str | None = None,
 ) -> dict:
+    """Shared compaction pipeline for compact_session and
+    continue_after_clear. By default operates on session_path's full
+    transcript (trigger "manual", boundary anchored to the file's literal
+    last line) -- compact_session and the CLI rely on exactly this
+    default and pass none of the three trailing params. `lines`,
+    `trigger`, and `logical_parent_uuid_override` exist solely for
+    continue_after_clear, which compacts only a pre-/clear span rather
+    than the whole file and must anchor any appended boundary to that
+    span's own last line, not the file's true end (see
+    jsonl_append.append_compaction's docstring)."""
     cfg = config_mod.load_config()
     resolved_model = model or cfg.model
     resolved_budget = context_budget or cfg.context_budget
     api_client = _build_client(cfg)
 
-    lines = transcript.load_transcript(session_path)
+    lines = lines if lines is not None else transcript.load_transcript(session_path)
     pre_tokens = tokens.estimate_transcript_tokens(lines)
 
     loop_config = loop.LoopConfig(
@@ -87,7 +100,7 @@ def _run_compaction(
 
     output = markdown_out.CompactionOutput(
         source_session=session_path,
-        trigger="manual",
+        trigger=trigger,
         model=resolved_model,
         backend_base_url=cfg.base_url,
         context_budget=resolved_budget,
@@ -120,10 +133,11 @@ def _run_compaction(
                 session_path=session_path,
                 summary_text=result.final_summary_text,
                 preserved_tail=preserved,
-                trigger="manual",
+                trigger=trigger,
                 pre_tokens=pre_tokens,
                 post_tokens=post_tokens,
                 duration_ms=duration_ms,
+                logical_parent_uuid_override=logical_parent_uuid_override,
             )
             response_dict["jsonl_appended"] = True
             response_dict["jsonl_boundary_uuid"] = append_result.boundary_uuid
@@ -217,6 +231,149 @@ def compact_session(
         append_to_jsonl,
         resolution_meta,
     )
+
+
+@mcp.tool
+def continue_after_clear(
+    session_path: str | None = None,
+    custom_instructions: str | None = None,
+    context_budget: int | None = None,
+    model: str | None = None,
+    output_path: str | None = None,
+    fallback_model: str | None = None,
+    append_to_jsonl: bool = False,
+) -> dict:
+    """Recover a resumable summary of the current session's most recent
+    pre-/clear span, for continuing work right after a human runs /clear.
+
+    Nothing external -- this tool, an appended JSONL boundary, a
+    cross-session message -- can trigger the real client's own /clear or
+    /compact, or make it send less to the model on a future turn (see
+    jsonl_append.py's module docstring and README.md's "Output" section
+    for the confirmed test of this). /clear itself is free (no model
+    call) and does not rotate the session file or session ID -- it's
+    recorded in-place as an ordinary line on the same thread. So the only
+    usable "compact and continue" pattern is: a human runs /clear
+    themselves, then the freshly-cleared agent calls this tool to recover
+    a summary of what came before, framed to resume acting on
+    immediately. Calling compact_session instead would summarize the
+    whole session including this tool's own invocation and anything after
+    /clear that hasn't happened yet from the agent's perspective.
+
+    session_path/resolution behaves identically to compact_session (see
+    its docstring): reuses CLAUDE_CODE_SESSION_ID-based resolution and the
+    same {"ok": false, "reason": "ambiguous_session"/"no_session_found",
+    ...} failure shapes. In this tool's primary use case (called right
+    after /clear in the same session) it should essentially always
+    resolve unambiguously via the env var.
+
+    Once resolved, this scans the session's main thread for every /clear
+    command line. If none is found:
+      {"ok": false, "reason": "no_clear_boundary_found", "detail": "..."}
+    -- this tool is only meaningful right after /clear; run /clear first,
+    or use compact_session for a whole-session summary instead.
+
+    /clear does not break the transcript's parentUuid chain, so if the
+    session has been /clear'd more than once, the *whole* history back to
+    session start is still reachable -- summarizing everything before the
+    last /clear would re-summarize spans an earlier continue_after_clear
+    call already returned. So only the span since the *previous* /clear
+    (or since session start, for the first one) is summarized. If that
+    span is empty (the /clear was the first thing on the thread):
+      {"ok": false, "reason": "empty_pre_clear_span", "detail": "..."}
+
+    On success, returns the same fields compact_session does
+    (output_path, passes, fallback_passes, multi_pass_reason,
+    pre_tokens_estimate, post_tokens_estimate, session_path, ...the
+    resolution fields), plus:
+      - summary: the resume-framed text (response.build_resume_preamble's
+        "resume directly, don't acknowledge, don't ask questions"
+        wrapper around the cleaned summary). This is DIFFERENT from
+        compact_session's `summary` field, which is the bare cleaned
+        text -- here it's the primary field because this tool's result
+        is read directly by the very agent that must resume acting on
+        it, in the same position a real injected isCompactSummary
+        message would occupy relative to its next turn.
+      - summary_cleaned: the bare cleaned summary (compact_session's
+        equivalent field), kept for reference/archival use.
+      - pre_clear_line_count: how many transcript lines were in the
+        summarized span.
+
+    If append_to_jsonl is True, appends the same compact_boundary +
+    isCompactSummary sequence compact_session can append, but anchored to
+    the summarized span's own last line rather than the file's current
+    true end (which, by the time this tool runs, is necessarily content
+    from after /clear -- anchoring there would misrepresent what was
+    compacted). The appended sequence still lands physically at the
+    file's true end regardless (JSONL is append-only), so it's a
+    historical record of the compaction, not a live-resumable branch --
+    same "does not reduce cost on the next resumed turn" caveat as
+    compact_session applies here too."""
+    resolved_cwd = discovery.resolve_cwd()
+    resolved_session, resolution_meta = discovery.resolve_session(session_path, resolved_cwd)
+    if resolved_session is None:
+        if resolution_meta.get("source") == "ambiguous":
+            return {
+                "ok": False,
+                "reason": "ambiguous_session",
+                "detail": (
+                    f"{resolution_meta['candidate_count']} session transcripts exist for this project "
+                    "and none could be identified as the caller automatically -- pick one from "
+                    "candidates and re-call with session_path set to its path."
+                ),
+                "candidates": resolution_meta["candidates"],
+            }
+        return {
+            "ok": False,
+            "reason": "no_session_found",
+            "detail": f"no session found for project directory {resolved_cwd}",
+        }
+
+    all_lines = transcript.load_transcript(resolved_session)
+    clear_indices = discovery.find_clear_indices(all_lines)
+    if not clear_indices:
+        return {
+            "ok": False,
+            "reason": "no_clear_boundary_found",
+            "detail": (
+                "No /clear command found on this session's main thread -- "
+                "continue_after_clear is only meaningful right after running "
+                "/clear. Run /clear first, or use compact_session for a "
+                "whole-session summary instead."
+            ),
+        }
+
+    span_start = clear_indices[-2] + 1 if len(clear_indices) > 1 else 0
+    span_lines = all_lines[span_start:clear_indices[-1]]
+    if not span_lines:
+        return {
+            "ok": False,
+            "reason": "empty_pre_clear_span",
+            "detail": "Nothing to summarize -- /clear was the first thing on this session's thread since the previous /clear (or session start).",
+        }
+
+    result = _run_compaction(
+        resolved_session,
+        custom_instructions,
+        context_budget,
+        model,
+        Path(output_path) if output_path else None,
+        fallback_model,
+        append_to_jsonl,
+        resolution_meta,
+        lines=span_lines,
+        trigger="continue_after_clear",
+        logical_parent_uuid_override=span_lines[-1].get("uuid"),
+    )
+    if not result.get("ok"):
+        return result
+
+    result["summary_cleaned"] = result["summary"]
+    result["summary"] = response.build_resume_preamble(
+        result["summary_cleaned"], transcript_path=str(resolved_session),
+    )
+    result["pre_clear_line_count"] = len(span_lines)
+    return result
 
 
 @mcp.tool

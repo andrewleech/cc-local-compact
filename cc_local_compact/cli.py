@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import discovery, server
+from . import discovery, server, transcript
 
 
 def _prompt_for_session(candidates: list[dict]) -> Path | None:
@@ -48,6 +48,28 @@ def _cmd_compact(args: argparse.Namespace) -> None:
         else:
             print(json.dumps({"ok": False, "reason": "no_session_found", "detail": f"no session found for project directory {resolved_cwd}"}))
             raise SystemExit(1)
+
+    lines_override = None
+    trigger = "manual"
+    if args.before_last_clear:
+        all_lines = transcript.load_transcript(session_path)
+        clear_indices = discovery.find_clear_indices(all_lines)
+        if not clear_indices:
+            print(json.dumps({
+                "ok": False, "reason": "no_clear_boundary_found",
+                "detail": "no /clear command found on this session's main thread",
+            }))
+            raise SystemExit(1)
+        span_start = clear_indices[-2] + 1 if len(clear_indices) > 1 else 0
+        lines_override = all_lines[span_start:clear_indices[-1]]
+        if not lines_override:
+            print(json.dumps({
+                "ok": False, "reason": "empty_pre_clear_span",
+                "detail": "nothing to summarize before the session's last /clear (since the previous /clear, or session start)",
+            }))
+            raise SystemExit(1)
+        trigger = "continue_after_clear"
+
     result = server._run_compaction(
         session_path,
         args.custom_instructions,
@@ -57,6 +79,8 @@ def _cmd_compact(args: argparse.Namespace) -> None:
         args.fallback_model,
         args.append_to_jsonl,
         resolution_meta,
+        lines=lines_override,
+        trigger=trigger,
     )
     print(json.dumps(result, indent=2))
     if not result.get("ok"):
@@ -90,6 +114,20 @@ def main() -> None:
             "matching the real /compact's on-disk shape. Record-consistency only -- "
             "does not reduce cost on the session's next resumed turn. Avoid on a "
             "session the real Claude Code client currently has open."
+        ),
+    )
+    compact_parser.add_argument(
+        "--before-last-clear", dest="before_last_clear", action="store_true", default=False,
+        help=(
+            "Summarize only the span before the session's last /clear command "
+            "(since the previous /clear if there was one, else since session "
+            "start) instead of the whole transcript -- exercises the same "
+            "slicing continue_after_clear (MCP tool) uses, for dry-running "
+            "outside a live session. Fails with reason 'no_clear_boundary_found' "
+            "if the session has no /clear, or 'empty_pre_clear_span' if there's "
+            "nothing in that span. Does not apply continue_after_clear's "
+            "resume-framed summary wrapping -- there's no live agent here to "
+            "read it."
         ),
     )
     compact_parser.set_defaults(func=_cmd_compact)

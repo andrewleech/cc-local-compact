@@ -229,3 +229,58 @@ def test_describe_session_empty_when_no_content(tmp_path):
     path.write_text("")
 
     assert discovery.describe_session(path) == {"display_name": "(no visible content)", "display_name_source": "empty"}
+
+
+def _clear_line(uuid: str) -> dict:
+    return {
+        "type": "user", "uuid": uuid,
+        "message": {
+            "content": (
+                "<command-name>/clear</command-name>\n            "
+                "<command-message>clear</command-message>\n            "
+                "<command-args></command-args>"
+            ),
+        },
+    }
+
+
+def test_find_clear_indices_detects_single_clear():
+    lines = [
+        {"type": "user", "uuid": "u1", "message": {"content": "hello"}},
+        _clear_line("u2"),
+        {"type": "system", "subtype": "local_command", "uuid": "u3", "content": "<local-command-stdout></local-command-stdout>"},
+        {"type": "user", "uuid": "u4", "message": {"content": "post-clear message"}},
+    ]
+    assert discovery.find_clear_indices(lines) == [1]
+
+
+def test_find_clear_indices_returns_all_in_order():
+    lines = [
+        {"type": "user", "uuid": "u1", "message": {"content": "hello"}},
+        _clear_line("u2"),
+        {"type": "user", "uuid": "u3", "message": {"content": "more"}},
+        _clear_line("u4"),
+        {"type": "user", "uuid": "u5", "message": {"content": "even more"}},
+    ]
+    assert discovery.find_clear_indices(lines) == [1, 3]
+
+
+def test_find_clear_indices_empty_when_absent():
+    lines = [{"type": "user", "uuid": "u1", "message": {"content": "hello"}}]
+    assert discovery.find_clear_indices(lines) == []
+
+
+def test_find_clear_indices_ignores_non_string_content():
+    lines = [{
+        "type": "user", "uuid": "u1",
+        "message": {"content": [{"type": "text", "text": "please explain <command-name>/clear</command-name>"}]},
+    }]
+    assert discovery.find_clear_indices(lines) == []
+
+
+def test_find_clear_indices_ignores_non_user_lines():
+    lines = [{
+        "type": "assistant", "uuid": "u1",
+        "message": {"content": "<command-name>/clear</command-name>"},
+    }]
+    assert discovery.find_clear_indices(lines) == []

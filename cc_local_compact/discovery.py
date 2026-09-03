@@ -48,6 +48,8 @@ _RENAME_RE = re.compile(
     re.DOTALL,
 )
 
+_CLEAR_MARKER = "<command-name>/clear</command-name>"
+
 
 def resolve_cwd(explicit: Path | None = None) -> Path:
     """Prefer an explicitly-given directory, then CLAUDE_PROJECT_DIR (the
@@ -153,6 +155,32 @@ def describe_session(path: Path) -> dict:
     if last_text:
         return {"display_name": _condense(last_text, width), "display_name_source": "last_message"}
     return {"display_name": "(no visible content)", "display_name_source": "empty"}
+
+
+def find_clear_indices(lines: list[dict]) -> list[int]:
+    """Indices in `lines` (transcript.load_transcript's main-thread output,
+    causal order) of every /clear command line, oldest first.
+
+    /clear is recorded differently from /rename: it's a type:"user" line
+    whose message.content is the literal command-tag string Claude Code's
+    slash-command dispatcher writes ("<command-name>/clear</command-name>
+    ..."), immediately followed on the thread by a
+    type:"system",subtype:"local_command" line carrying an empty
+    <local-command-stdout></local-command-stdout> reply -- unlike /rename
+    (_RENAME_RE), which IS itself the system/local_command line, not a
+    user line naming the command. /clear does not break the parentUuid
+    chain or start a new session file (confirmed against a real transcript
+    containing one), so a caller wanting only the span since the most
+    recent /clear must use the last two entries here, not just the last
+    one -- see continue_after_clear in server.py."""
+    indices = []
+    for i, line in enumerate(lines):
+        if line.get("type") != "user":
+            continue
+        content = (line.get("message") or {}).get("content")
+        if isinstance(content, str) and _CLEAR_MARKER in content:
+            indices.append(i)
+    return indices
 
 
 def list_sessions(cwd: Path, claude_home: Path | None = None) -> list[dict]:

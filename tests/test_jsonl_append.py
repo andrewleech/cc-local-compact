@@ -165,6 +165,32 @@ def test_append_compaction_skips_trailing_control_lines_with_no_uuid(tmp_path):
     assert boundary["logicalParentUuid"] == "a1"
 
 
+def test_append_compaction_respects_anchor_override(tmp_path):
+    session_path = tmp_path / "session.jsonl"
+    original_lines = [
+        {"type": "user", "uuid": "u1", "parentUuid": None, "message": {"role": "user", "content": "pre-clear"}, **SESSION_METADATA},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1", "message": {"role": "assistant", "content": "reply"}, **SESSION_METADATA},
+        {"type": "user", "uuid": "u2", "parentUuid": "a1", "message": {"role": "user", "content": "post-clear"}, **SESSION_METADATA},
+    ]
+    _write_jsonl(session_path, original_lines)
+
+    result = jsonl_append.append_compaction(
+        session_path=session_path,
+        summary_text="<summary>\ntest\n</summary>",
+        preserved_tail=[],
+        trigger="continue_after_clear",
+        pre_tokens=10, post_tokens=5, duration_ms=1,
+        logical_parent_uuid_override="a1",
+    )
+
+    assert result.logical_parent_uuid == "a1"  # the pre-clear span's last line, not u2 (the file's true last line)
+    all_lines = [json.loads(l) for l in session_path.read_text().splitlines() if l.strip()]
+    boundary = all_lines[len(original_lines)]
+    assert boundary["logicalParentUuid"] == "a1"
+    # session-level metadata still comes from the file's true last line regardless of the override
+    assert boundary["sessionId"] == SESSION_METADATA["sessionId"]
+
+
 def test_append_compaction_raises_on_empty_session(tmp_path):
     session_path = tmp_path / "empty.jsonl"
     session_path.write_text("")

@@ -165,6 +165,7 @@ def append_compaction(
     post_tokens: int,
     duration_ms: int,
     transcript_path: str | None = None,
+    logical_parent_uuid_override: str | None = None,
 ) -> AppendResult:
     """Appends a compact_boundary + isCompactSummary + re-chained
     preserved-tail sequence to session_path's own JSONL, in the shape the
@@ -172,7 +173,18 @@ def append_compaction(
     -- this wraps it with response.build_resume_preamble itself, matching
     how the real app's Vq wrapper is applied to the raw NBn/rw output, not
     a pre-cleaned string. See the module docstring for what this does and
-    does not achieve."""
+    does not achieve.
+
+    logical_parent_uuid_override anchors the boundary's logicalParentUuid
+    to a specific uuid instead of the file's literal last line. Needed
+    when what was actually compacted isn't the whole session up to the
+    file's true end -- e.g. continue_after_clear's pre-/clear span, where
+    the append still physically lands at true EOF (JSONL is append-only)
+    but the boundary must still point at the last line of what it
+    actually summarizes, not whatever's been appended to the file since.
+    session_metadata (sessionId/cwd/version/...) is still pulled from the
+    file's true last line regardless -- those are file-level facts, not
+    tied to which span was summarized."""
     raw_lines = _read_raw_lines(session_path)
     if not raw_lines:
         raise ValueError(f"{session_path} has no existing lines to anchor a boundary to")
@@ -185,7 +197,7 @@ def append_compaction(
     last_line = next((line for line in reversed(raw_lines) if line.get("uuid")), None)
     if last_line is None:
         raise ValueError(f"{session_path} has no line with a uuid to anchor a boundary to")
-    logical_parent_uuid = last_line.get("uuid")
+    logical_parent_uuid = logical_parent_uuid_override or last_line.get("uuid")
     session_metadata = _session_metadata_from(last_line)
 
     anchor_uuid = str(uuid_mod.uuid4())

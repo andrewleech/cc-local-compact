@@ -42,6 +42,18 @@ Always writes a standalone markdown summary file. Optionally (`--append-jsonl` /
 
 What appending *is* confirmed to do: it's safe. Directly tested against a live throwaway session (write the sequence, then `claude --resume` it, repeated across several trials) with no corruption and no errors -- the client just ignores the boundary and continues normally. So this exists purely for **on-disk record consistency**: a session's own transcript reflects that a compaction happened, in the real schema, for `/resume` picker display or any other tooling that parses this format -- not as a way to make the next turn cheaper. Avoid using it on a session the real Claude Code client currently has open, since concurrent-write behavior against a live client process hasn't been tested (only against a closed/idle session file).
 
+## Recovering after a manual `/clear`
+
+Nothing external can trigger the real client's own `/clear`/`/compact`, or make it send less to the model on a future turn -- see "Output" above for the confirmed test of that. `/clear` itself is free (no model call) and doesn't rotate the session file or ID -- confirmed by inspecting a real transcript containing one: it's recorded in-place as an ordinary `type:"user"` line, and the `parentUuid` chain runs straight across it unbroken. So the only usable "compact and continue" pattern is: a human runs `/clear` themselves, then the freshly-cleared agent calls `continue_after_clear` to recover a summary of what came before, in the same session file.
+
+`/clear` is detected differently from `/rename` (see "Which session gets compacted" above): it's a `type:"user"` line whose `message.content` is the literal `<command-name>/clear</command-name>...` tag string, not a `type:"system",subtype:"local_command"` line. `discovery.find_clear_indices` returns every such line's index on the transcript's live main thread (via `transcript.load_transcript`, so an abandoned branch's stale `/clear` -- e.g. orphaned by a later rewind -- is correctly ignored, same principle as `describe_session`'s rename handling; confirmed against two real sessions where exactly this happened).
+
+Because `/clear` doesn't break the `parentUuid` chain, the full session history is still reachable no matter how many times it's been cleared -- summarizing everything before the *last* `/clear` would re-summarize spans an earlier `continue_after_clear` call already returned. So only the span since the *previous* `/clear` (or since session start, for the first one) gets summarized. No `/clear` on the live thread at all returns `{"ok": false, "reason": "no_clear_boundary_found", ...}`; an empty span (`/clear` was the first thing since the prior boundary) returns `{"ok": false, "reason": "empty_pre_clear_span", ...}` -- neither silently falls back to summarizing the whole transcript.
+
+Unlike `compact_session`, whose `summary` field is the bare cleaned text (that tool's caller/purpose is heterogeneous -- archival, review, handoff to a different session), `continue_after_clear`'s `summary` field is wrapped in `response.build_resume_preamble`'s "resume directly, don't acknowledge, don't ask questions" framing. This tool is only ever called by an agent that was just cleared and must resume acting, and its `tool_result` lands in exactly the position a real injected `isCompactSummary` message would -- there's no other channel for that framing to reach the agent through. The bare cleaned text is still available as `summary_cleaned`.
+
+The CLI's `compact --before-last-clear` flag exercises the same slicing outside a live session, for dry-running -- it does not apply the resume-framed wrapping, since there's no live agent there to read it.
+
 ## Backend
 
 Talks directly to the local inference backend via the `anthropic` Python SDK with a custom `base_url` -- the backend (`llama-swap` on `titan:8080`, serving Qwen3.8/Gemma-4 GGUF models) speaks the Anthropic `/v1/messages` protocol, so grouped transcript messages go through close to verbatim with no lossy translation layer. Does not route through the `cc-local-router` proxy process, though it defaults to reading the same `CLAUDE_NET_PROXY_LOCAL_URL`/`CLAUDE_NET_PROXY_LOCAL_MODEL` environment variables that proxy already uses, so there's one place to keep the backend address in sync.
@@ -93,7 +105,7 @@ cc_local_compact/
   fallback.py              composes a primary+fallback model pair into one SummarizeFn
   markdown_out.py            output file structure/writer
   jsonl_append.py              optional: append a compact_boundary to the session's own JSONL
-  discovery.py                   cwd -> project-dir slug -> session, via CLAUDE_CODE_SESSION_ID or interactive/agent disambiguation
+  discovery.py                   cwd -> project-dir slug -> session (via CLAUDE_CODE_SESSION_ID or interactive/agent disambiguation), plus /clear-boundary detection for continue_after_clear
   server.py                         FastMCP tool surface (stdio)
   cli.py                               standalone CLI
 config.py                                environment-variable resolution
