@@ -34,6 +34,7 @@ COMMAND_NAME = "remind"
 
 COMMAND_FILE_CONTENT = """---
 description: Recover a resumable summary of what happened before your last /clear
+argument-hint: [optional: instructions to focus the summary, like /compact's]
 ---
 No recovery hook ran for this command. If you were expecting a summary of
 your pre-/clear conversation, check `cc-local-compact register` was run and

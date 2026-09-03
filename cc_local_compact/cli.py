@@ -126,10 +126,16 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
     session_track.py's Stop hook recorded for this exact process, rather
     than any file-boundary or timing heuristic -- immune to "more than
     one session open on this project" ambiguity, since PID is per-window,
-    not per-project."""
+    not per-project.
+
+    `payload["command_args"]`, if non-empty, is passed through as
+    custom_instructions -- the same role /compact's own trailing text
+    plays ("/compact focusing on foo"). Confirmed the real
+    UserPromptExpansion payload carries this field."""
     session_track.log(f"remind-hook: start ppid={pid} session_id={payload.get('session_id')!r}")
     try:
         my_session_id = payload.get("session_id")
+        custom_instructions = payload.get("command_args") or None
         tracked_pid = session_track.find_tracked_pid(pid) if my_session_id else None
         session_track.log(f"remind-hook: find_tracked_pid({pid}) -> {tracked_pid}")
         predecessor = session_track.predecessor_session(pid, my_session_id) if my_session_id else None
@@ -146,11 +152,11 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
             session_track.log(f"remind-hook: predecessor file missing: {session_path}")
             return f"/remind: predecessor session file no longer exists ({session_path})."
 
-        session_track.log(f"remind-hook: starting compaction of {session_path}")
+        session_track.log(f"remind-hook: starting compaction of {session_path} (custom_instructions={custom_instructions!r})")
         start = time.monotonic()
         server = _import_server()
         result = server._run_compaction(
-            session_path, None, None, None, None, None, False, None, trigger="remind",
+            session_path, custom_instructions, None, None, None, None, False, None, trigger="remind",
         )
         elapsed = time.monotonic() - start
         session_track.log(f"remind-hook: compaction finished in {elapsed:.1f}s ok={result.get('ok')} reason={result.get('reason')}")

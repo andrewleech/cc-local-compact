@@ -12,7 +12,9 @@ def test_register_writes_command_file(tmp_path):
 
     command_path = home / "commands" / "remind.md"
     assert command_path.is_file()
-    assert "description:" in command_path.read_text()
+    content = command_path.read_text()
+    assert "description:" in content
+    assert "argument-hint:" in content
 
 
 def test_register_creates_settings_json_with_all_three_hooks(tmp_path):

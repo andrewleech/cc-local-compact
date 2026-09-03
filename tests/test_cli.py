@@ -55,6 +55,46 @@ def _fake_summarize():
     return fake
 
 
+def test_remind_hook_text_passes_command_args_as_custom_instructions(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    seen_instructions = []
+
+    def fake(client, model, group, custom_instructions, strip_media_flag, max_tokens):
+        seen_instructions.append(custom_instructions)
+        return AttemptResult(ok=True, summary_text="<summary>\ntest\n</summary>", total_usage=None)
+
+    monkeypatch.setattr(client_mod, "summarize_group", fake)
+
+    a1, tail = _turn("a1", None)
+    a2, tail = _turn("a2", tail)
+    old_path = tmp_path / "old_session.jsonl"
+    _write_transcript(old_path, a1 + a2)
+    session_track.record_turn(9999, "s-old", str(old_path), str(tmp_path))
+
+    cli._remind_hook_text({"session_id": "s-new", "command_args": "focusing on the API redesign"}, pid=9999)
+    assert seen_instructions[0] == "focusing on the API redesign"
+
+
+def test_remind_hook_text_empty_command_args_means_no_custom_instructions(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    seen_instructions = []
+
+    def fake(client, model, group, custom_instructions, strip_media_flag, max_tokens):
+        seen_instructions.append(custom_instructions)
+        return AttemptResult(ok=True, summary_text="<summary>\ntest\n</summary>", total_usage=None)
+
+    monkeypatch.setattr(client_mod, "summarize_group", fake)
+
+    a1, tail = _turn("a1", None)
+    a2, tail = _turn("a2", tail)
+    old_path = tmp_path / "old_session.jsonl"
+    _write_transcript(old_path, a1 + a2)
+    session_track.record_turn(9999, "s-old", str(old_path), str(tmp_path))
+
+    cli._remind_hook_text({"session_id": "s-new", "command_args": ""}, pid=9999)
+    assert seen_instructions[0] is None
+
+
 def test_remind_hook_text_no_predecessor_tracked(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
