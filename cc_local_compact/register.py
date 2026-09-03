@@ -62,6 +62,17 @@ HOOK_SPECS = [
         "timeout": 3600,
     },
     {"event": "Stop", "matcher": None, "args": ["track-session"]},
+    # SessionStart's `source` is one of startup/resume/fork/clear/compact,
+    # firing immediately on each -- unlike Stop, it doesn't wait for a turn
+    # to complete. Two real gaps this closes: `claude -r <session>` followed
+    # by /clear with no turn run in between (confirmed live: nothing was
+    # ever tracked for that PID, so /clear had no `current` to preserve and
+    # /remind had nothing to fall back to either); and /clear itself now
+    # shifts current->previous the instant it happens, rather than only on
+    # whatever turn completes next in the new session. Reuses track-session
+    # unchanged -- SessionStart's payload has the same session_id/
+    # transcript_path/cwd fields Stop's does.
+    {"event": "SessionStart", "matcher": None, "args": ["track-session"]},
 ]
 
 

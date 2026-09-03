@@ -184,12 +184,21 @@ def _cmd_remind_hook(_args: argparse.Namespace) -> None:
 
 
 def _cmd_track_session(_args: argparse.Namespace) -> None:
-    """Stop hook body (installed by `register`): records "this process's
-    current session" after every completed turn, so /remind can later
-    find the exact predecessor session across a /clear -- see
+    """Body for both the Stop and SessionStart hooks (installed by
+    `register`): records "this process's current session", so /remind can
+    later find the exact predecessor session across a /clear -- see
     session_track.py's module docstring for why this exists and why PID
-    is the correlation key. Never raises: a tracking failure should never
-    surface as a visible error on an ordinary turn."""
+    is the correlation key. Registered under both events because Stop
+    alone only updates on a completed turn -- SessionStart (source
+    startup/resume/fork/clear/compact) fires immediately instead, closing
+    the gap where `claude -r <session>` is followed by /clear with no
+    turn run in between (nothing would ever get tracked for that PID) and
+    making /clear's own current->previous shift happen the instant it
+    runs rather than waiting on whatever turn completes next. The payload
+    shape (session_id/transcript_path/cwd) is the same for both events, so
+    this body doesn't need to know which one triggered it. Never raises: a
+    tracking failure should never surface as a visible error on an
+    ordinary turn."""
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         session_id = payload.get("session_id")

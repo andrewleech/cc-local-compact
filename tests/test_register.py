@@ -15,7 +15,7 @@ def test_register_writes_command_file(tmp_path):
     assert "description:" in command_path.read_text()
 
 
-def test_register_creates_settings_json_with_both_hooks(tmp_path):
+def test_register_creates_settings_json_with_all_three_hooks(tmp_path):
     home = tmp_path / "claude_home"
     result = register.register(home, executable=EXECUTABLE)
 
@@ -36,7 +36,12 @@ def test_register_creates_settings_json_with_both_hooks(tmp_path):
     assert "matcher" not in stop_entries[0]
     assert stop_entries[0]["hooks"] == [{"type": "command", "command": EXECUTABLE, "args": ["track-session"]}]
 
-    assert result["hooks_already_present"] == {"UserPromptExpansion": False, "Stop": False}
+    session_start_entries = settings["hooks"]["SessionStart"]
+    assert len(session_start_entries) == 1
+    assert "matcher" not in session_start_entries[0]
+    assert session_start_entries[0]["hooks"] == [{"type": "command", "command": EXECUTABLE, "args": ["track-session"]}]
+
+    assert result["hooks_already_present"] == {"UserPromptExpansion": False, "Stop": False, "SessionStart": False}
 
 
 def test_register_preserves_unrelated_existing_settings(tmp_path):
@@ -85,7 +90,8 @@ def test_register_is_idempotent(tmp_path):
     settings = json.loads((home / "settings.json").read_text())
     assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
     assert len(settings["hooks"]["Stop"][0]["hooks"]) == 1
-    assert result["hooks_already_present"] == {"UserPromptExpansion": True, "Stop": True}
+    assert len(settings["hooks"]["SessionStart"][0]["hooks"]) == 1
+    assert result["hooks_already_present"] == {"UserPromptExpansion": True, "Stop": True, "SessionStart": True}
 
 
 def test_register_refreshes_stale_status_message_on_already_installed_hook(tmp_path, monkeypatch):
@@ -126,7 +132,7 @@ def test_register_refreshes_stale_timeout_on_already_installed_hook(tmp_path):
     assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
 
 
-def test_unregister_removes_command_file_and_both_hooks(tmp_path):
+def test_unregister_removes_command_file_and_all_hooks(tmp_path):
     home = tmp_path / "claude_home"
     register.register(home, executable=EXECUTABLE)
 
@@ -134,12 +140,13 @@ def test_unregister_removes_command_file_and_both_hooks(tmp_path):
 
     assert result == {
         "ok": True, "command_file_removed": True,
-        "hooks_removed": {"UserPromptExpansion": True, "Stop": True},
+        "hooks_removed": {"UserPromptExpansion": True, "Stop": True, "SessionStart": True},
     }
     assert not (home / "commands" / "remind.md").is_file()
     settings = json.loads((home / "settings.json").read_text())
     assert "UserPromptExpansion" not in settings.get("hooks", {})
     assert "Stop" not in settings.get("hooks", {})
+    assert "SessionStart" not in settings.get("hooks", {})
 
 
 def test_unregister_preserves_unrelated_hooks_and_settings(tmp_path):
@@ -165,5 +172,5 @@ def test_unregister_on_never_registered_is_a_safe_noop(tmp_path):
     result = register.unregister(home, executable=EXECUTABLE)
     assert result == {
         "ok": True, "command_file_removed": False,
-        "hooks_removed": {"UserPromptExpansion": False, "Stop": False},
+        "hooks_removed": {"UserPromptExpansion": False, "Stop": False, "SessionStart": False},
     }
