@@ -61,7 +61,7 @@ def test_remind_hook_text_no_predecessor_tracked(tmp_path, monkeypatch):
     assert "no predecessor session tracked" in text
 
 
-def test_remind_hook_text_uses_tracked_predecessor_and_returns_resume_framed_summary(tmp_path, monkeypatch):
+def test_remind_hook_text_uses_tracked_predecessor_and_returns_passive_framed_summary(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(client_mod, "summarize_group", _fake_summarize())
 
@@ -73,7 +73,15 @@ def test_remind_hook_text_uses_tracked_predecessor_and_returns_resume_framed_sum
     session_track.record_turn(9999, "s-old", str(old_path), str(tmp_path))
 
     text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
-    assert "Continue the conversation from where it left off" in text
+    # deliberately NOT build_resume_preamble's "resume directly, don't ask
+    # questions" framing -- confirmed live that wording made a real /remind
+    # run launch straight into flashing physical hardware with no human
+    # confirmation on the turn that injected it (suppressOriginalPrompt means
+    # this text is the ONLY thing the model sees on that turn). See
+    # response.build_remind_preamble's docstring.
+    assert "wait for the user's next message" in text
+    assert "Continue the conversation from where it left off" not in text
+    assert "Resume directly" not in text
 
 
 def test_remind_hook_text_predecessor_file_missing(tmp_path, monkeypatch):
@@ -111,7 +119,8 @@ def test_cmd_remind_hook_prints_valid_hook_json(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
     assert out["hookSpecificOutput"]["suppressOriginalPrompt"] is True
-    assert "Continue the conversation from where it left off" in out["hookSpecificOutput"]["additionalContext"]
+    assert "wait for the user's next message" in out["hookSpecificOutput"]["additionalContext"]
+    assert "Continue the conversation from where it left off" not in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_cmd_remind_hook_handles_malformed_stdin_gracefully(tmp_path, monkeypatch, capsys):

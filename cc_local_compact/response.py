@@ -84,3 +84,44 @@ def build_resume_preamble(
             "last task as if the break never happened."
         )
     return text
+
+
+def build_remind_preamble(raw_summary_text: str, transcript_path: str | None = None) -> str:
+    """Framing for /remind's injected additionalContext -- deliberately
+    NOT build_resume_preamble's "resume directly, don't ask questions"
+    wording, even though /remind's summary comes from the same
+    compaction pipeline. That wording is written for the real app's own
+    /compact: injected as a live synthetic turn immediately before the
+    SAME ongoing task's next response, with a human actively watching who
+    hit a genuine context limit mid-flow -- continuing automatically is
+    the right call there. /remind's situation differs in two ways that
+    make that framing actively dangerous here instead: /clear is a
+    deliberate human action, not an accidental limit, so there's no
+    guarantee the user wants the same task continued at all, let alone
+    immediately; and because /remind's hook sets suppressOriginalPrompt,
+    this injected text is the ONLY thing the model sees on this turn --
+    there is no accompanying human message to interrupt a bad plan before
+    it executes. Confirmed live: build_resume_preamble's wording made a
+    real run launch straight into flashing physical hardware with zero
+    human confirmation on the very turn that injected it. This framing
+    explicitly tells the model to wait rather than act -- matching this
+    project's own established precedent in multipass.py, which already
+    avoids build_resume_preamble's framing for intermediate pass
+    summaries for the same underlying reason (wrong implication for
+    something that isn't a live task to resume)."""
+    text = (
+        "The conversation from before your last /clear has been recovered "
+        "and summarized below, for background only. This is not a request "
+        "to continue or resume any task, and no user message accompanies "
+        "it (this text was injected by a hook, not typed by the user). Do "
+        "not run commands, edit files, call tools, or otherwise act on "
+        "this summary. Read it for context, then wait for the user's next "
+        f"message before doing anything.\n\n{clean_summary(raw_summary_text)}"
+    )
+    if transcript_path:
+        text += (
+            "\n\nIf you need specific details from before the /clear (like "
+            "exact code snippets, error messages, or content generated "
+            f"earlier), read the full transcript at: {transcript_path}"
+        )
+    return text

@@ -156,7 +156,7 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
         session_track.log(f"remind-hook: compaction finished in {elapsed:.1f}s ok={result.get('ok')} reason={result.get('reason')}")
         if not result.get("ok"):
             return f"/remind: couldn't recover a summary -- {result.get('detail') or result.get('reason')}"
-        return response.build_resume_preamble(result["summary"], transcript_path=str(session_path))
+        return response.build_remind_preamble(result["summary"], transcript_path=str(session_path))
     except Exception as error:
         session_track.log(f"remind-hook: unexpected error: {error!r}")
         return f"/remind: recovery failed unexpectedly -- {error}"

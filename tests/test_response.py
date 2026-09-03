@@ -57,3 +57,25 @@ def test_build_resume_preamble_repl_state_cleared():
 def test_build_resume_preamble_no_follow_up_suppression():
     text = response.build_resume_preamble(RAW, suppress_follow_up_questions=False)
     assert "Continue the conversation from where it left off" not in text
+
+
+def test_build_remind_preamble_tells_model_to_wait_not_act():
+    # deliberately NOT build_resume_preamble's framing -- see this
+    # function's own docstring and cc_local_compact/README.md for why
+    # (confirmed live: the "resume directly" wording made a real /remind
+    # run launch straight into flashing physical hardware with no human
+    # confirmation, since suppressOriginalPrompt means this is the only
+    # thing the model sees on that turn).
+    text = response.build_remind_preamble(RAW, transcript_path="/tmp/session.jsonl")
+    assert "Continue the conversation from where it left off" not in text
+    assert "Resume directly" not in text
+    assert "do not run commands" in text.lower()
+    assert "wait for the user's next message" in text
+    assert "read the full transcript at: /tmp/session.jsonl" in text
+    assert "Summary:" in text
+
+
+def test_build_remind_preamble_without_transcript_path():
+    text = response.build_remind_preamble(RAW)
+    assert "read the full transcript" not in text
+    assert "Summary:" in text
