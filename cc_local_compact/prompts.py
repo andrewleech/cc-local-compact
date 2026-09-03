@@ -1,8 +1,8 @@
 """The summarization prompt, ported verbatim from Claude Code's Gse/OBn/hCt
-(chunk-4scc8rka.js, module 356 of the 2.1.252 build -- see
+(chunk-4scc8rka.js, module 356 of the 2.1.252 build; see
 docs/compact-architecture.md in the cc-patcher repo, "The prompt template
 (verbatim)"). This is the single most load-bearing artifact for matching
-the real /compact's summarization behavior -- keep it byte-identical to the
+the real /compact's summarization behavior; keep it byte-identical to the
 source unless deliberately adapting it, and note any adaptation here rather
 than silently drifting from the original.
 
@@ -10,7 +10,7 @@ Deliberately NOT ported: Claude Code's `grt` step, which prepends a full
 system-prompt/tool-list scaffold to preserve Anthropic's prompt cache
 against the live conversation. That has no equivalent benefit against a
 fresh call to a local model and would only burn scarce local context
-budget, so this module sends no system prompt at all -- everything lives in
+budget, so this module sends no system prompt at all; everything lives in
 the trailing user turn, exactly as the source's own comment observes.
 """
 

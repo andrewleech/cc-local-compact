@@ -11,7 +11,7 @@ def _line(type_, uuid, content="x", message_id=None):
 
 def _build_groups(n):
     """n user/assistant pairs group into n+1 groups: a leading group with
-    just the first user message (no assistant -- group boundaries fall at
+    just the first user message (no assistant; group boundaries fall at
     each assistant message, so nothing precedes it into the same group),
     n-1 middle [assistant, next_user] groups, and a trailing single-
     assistant group with nothing after it."""

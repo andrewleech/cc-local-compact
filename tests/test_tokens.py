@@ -38,7 +38,7 @@ def test_estimate_block_thinking_and_redacted_thinking():
 
 def test_estimate_block_thinking_counts_signature_too():
     # DEVIATION from the real nt: a thinking block with empty visible text
-    # but a real signature blob is real payload data, not free -- see
+    # but a real signature blob is real payload data, not free; see
     # tokens.py's estimate_block for why this diverges from the source.
     block = {"type": "thinking", "thinking": "", "signature": "abcdefgh"}
     assert tokens.estimate_block(block) == 2

@@ -1,12 +1,12 @@
 """Model client: talks to the local Anthropic-protocol-compatible backend
 (llama-swap on titan:8080), ported from Claude Code's NBn/rw and the
 response-classification helpers Eb/LD/j9/tR/zse (chunk-4scc8rka.js, module
-356 of the 2.1.252 build -- see docs/compact-architecture.md in the
+356 of the 2.1.252 build; see docs/compact-architecture.md in the
 cc-patcher repo, "The summarization call").
 
 Deliberately dropped from the source: the `grt` system-prompt/tool-list
-scaffold (see prompts.py), the precompute cache (Bln -- no live session to
-speculate against), and PreCompact/PostCompact hook dispatch (Z4/DPe -- a
+scaffold (see prompts.py), the precompute cache (Bln, no live session to
+speculate against), and PreCompact/PostCompact hook dispatch (Z4/DPe, a
 later phase, not v1).
 """
 
@@ -24,14 +24,14 @@ class AttemptResult:
     summary_text: str | None = None
     total_usage: dict | None = None
     reason: str | None = None
-    """"prompt_too_long" | "media_too_large" | "error" | "aborted" -- only
+    """"prompt_too_long" | "media_too_large" | "error" | "aborted"; only
     set when ok is False."""
     token_gap: int | None = None
     detail: str | None = None
     used_fallback: bool = False
     """Set by fallback.with_fallback when this result came from the
     fallback model, not the primary. Always False from summarize_group
-    itself -- it has no concept of "fallback," only the composing wrapper
+    itself; it has no concept of "fallback," only the composing wrapper
     does."""
 
 
@@ -99,13 +99,13 @@ STANDARD_CONTENT_BLOCK_TYPES = {
 """The Anthropic Messages API's own content block types (matching what
 tokens.py's estimate_block already recognizes). Claude Code's own JSONL
 also carries block types that are internal to the real client and never
-part of the actual API schema -- e.g. `tool_reference` (seen inside a
+part of the actual API schema, e.g. `tool_reference` (seen inside a
 tool_result's content for control-flow tools like EnterPlanMode, which
 don't have a real result payload). CONFIRMED against the live backend:
 llama.cpp's Anthropic-compat shim (qwen3.8-27b, gemma) tolerates an
 unrecognized block type, passing it through; vLLM's shim (qwen3.5-9b) does
 strict schema validation and rejects the whole request with "Unexpected
-item type in content." -- bisected down to exactly this block type on a
+item type in content." - bisected down to exactly this block type on a
 real 488K-token transcript. Sanitizing before sending is required for
 correctness against any strict backend, not just a qwen3.5-9b quirk."""
 
@@ -140,7 +140,7 @@ def _to_api_messages(group: list[dict]) -> list[dict]:
     (uuid, parentUuid, timestamp, cwd, etc), and sanitizing any non-
     standard content block type (see STANDARD_CONTENT_BLOCK_TYPES). Lines
     without a user/assistant role message (attachment/system control
-    lines) are skipped -- they aren't valid Anthropic message-array
+    lines) are skipped; they aren't valid Anthropic message-array
     entries."""
     messages = []
     for line in group:
@@ -171,7 +171,7 @@ def _classify_error(error: anthropic.APIStatusError) -> AttemptResult:
     fallback in case a future backend or engine swap emits that shape
     instead). Because this gives an exact prompt-token count and context
     limit straight from the server, the resulting token_gap is a precise
-    value, not an estimate -- more precise than loop.py's self-estimated-
+    value, not an estimate; more precise than loop.py's self-estimated-
     gap fallback, which now only matters if a backend emits neither shape.
 
     The media-too-large check here is a keyword heuristic on the error
@@ -211,10 +211,10 @@ REQUEST_TIMEOUT_SECONDS = 1800.0
 """The anthropic SDK refuses a non-streaming call above ~21K max_tokens
 with no explicit timeout (its own client-side guard, assuming a request
 that large will take over 10 minutes and should stream to avoid a proxy
-timeout) -- hit in practice once context_budget-derived max_tokens grew
+timeout); hit in practice once context_budget-derived max_tokens grew
 past that for qwen3.8-27b's large window. This backend's own streaming
 implementation was tried as the fix and hung indefinitely (confirmed: even
-a trivial 2+2 request via client.messages.stream() never returned) --
+a trivial 2+2 request via client.messages.stream() never returned);
 whatever its Anthropic-compat SSE framing is doing, this SDK's stream
 consumer doesn't see a terminating event. Passing any explicit `timeout`
 to create() bypasses the SDK's guard entirely (it only computes/applies
@@ -232,7 +232,7 @@ def summarize_group(
 ) -> AttemptResult:
     """Port of NBn: one summarization attempt over one summarize-set. The
     model input is the group's own messages followed by one trailing
-    synthetic user turn carrying the summarization instructions -- the
+    synthetic user turn carrying the summarization instructions; the
     model literally continues the conversation, with no separate system
     prompt and no tools offered.
 
@@ -242,7 +242,7 @@ def summarize_group(
     by default, emitting a hidden `thinking` content block that counts
     against max_tokens even for a trivial response (27 output tokens for
     "2+2=4"), and this module's own prompt already asks the model to
-    externalize its reasoning as visible <analysis> text -- a second,
+    externalize its reasoning as visible <analysis> text; a second,
     hidden reasoning channel is pure budget waste for this task, not a
     quality benefit, and was a real contributor to the truncation bug
     documented in response.py. Anthropic's own `thinking` param and
@@ -256,7 +256,7 @@ def summarize_group(
     qwen3.5-9b never emits a thinking block whether the override is sent
     or not (content blocks are ['text'] either way), but sending it anyway
     cost ~43x the latency for identical output in a real side-by-side test
-    (147.4s vs 3.4s, same input_tokens/output_tokens both runs) -- some
+    (147.4s vs 3.4s, same input_tokens/output_tokens both runs); some
     backends appear to take a much slower code path when handling a
     non-default chat_template_kwargs value even when it changes nothing
     observable. See config.MODELS_WITH_THINKING_TOGGLE for the allowlist

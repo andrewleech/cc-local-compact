@@ -1,8 +1,8 @@
 """Message grouping, ported from Claude Code's Mq/n$ (chunk-4scc8rka.js,
-module 356 of the 2.1.252 build -- see docs/compact-architecture.md in the
+module 356 of the 2.1.252 build; see docs/compact-architecture.md in the
 cc-patcher repo for the source).
 
-A "group" is one assistant turn, keyed on the Anthropic API's message.id --
+A "group" is one assistant turn, keyed on the Anthropic API's message.id,
 not wall-clock time, not a fixed message count. progress-type lines are
 dropped before grouping. isVirtual user/assistant lines always join the
 current group. A new group starts only when an assistant line's message.id

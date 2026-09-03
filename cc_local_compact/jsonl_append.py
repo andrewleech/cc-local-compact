@@ -5,7 +5,7 @@ the cc-patcher repo, "Confirmed on-disk JSONL schema").
 
 CONFIRMED SAFE, CONFIRMED INERT for reducing future cost: appending this
 sequence to a session's JSONL does not corrupt the file or crash the
-client -- tested directly against a live throwaway session (write the
+client; tested directly against a live throwaway session (write the
 sequence, then `claude --resume` it, repeated across multiple trials with
 no errors). But it does NOT reduce what Claude Code sends to the remote
 model on the next resumed turn: the same experiment showed a resumed
@@ -13,9 +13,9 @@ session with an injected boundary reprocessing the FULL original
 conversation, token-for-token indistinguishable from a normal resume with
 no boundary at all. Separately confirmed via Claude Code's own
 documentation (cross-session-messaging.md): slash commands arriving
-through any channel other than direct interactive terminal input --
+through any channel other than direct interactive terminal input,
 including a session's own JSONL, MCP tool/prompt output, Remote Control,
-and the local cross-session messaging socket -- are never executed; there
+and the local cross-session messaging socket, are never executed; there
 is no external mechanism to trigger the real client-side /compact or
 /clear.
 
@@ -23,7 +23,7 @@ So: this module exists for **on-disk record consistency**, not as a
 cache-reload workaround. It makes a session's own transcript reflect that
 a compaction happened, in the same shape the real feature produces (for
 `/resume` picker display, transcript tooling, or anything else that parses
-this schema) -- not to make the *next* remote-model turn any cheaper.
+this schema), not to make the *next* remote-model turn any cheaper.
 Callers (server.py, cli.py) should present this as an explicit opt-in with
 that caveat stated, not as a default or an implied performance win.
 """
@@ -94,7 +94,7 @@ def build_boundary_line(
         # NOTE: the real xPe filters progress-type/empty-hook entries out of
         # "uuids" while "allUuids" keeps the unfiltered set. Our preserved
         # tail is already filtered to KEPT_TYPES by transcript.py, so there's
-        # no further distinction to draw here -- both lists are identical, a
+        # no further distinction to draw here; both lists are identical, a
         # known simplification relative to the source.
         compact_metadata["preservedMessages"] = {
             "anchorUuid": anchor_uuid,
@@ -142,7 +142,7 @@ def build_summary_line(summary_content: str, boundary_uuid: str, anchor_uuid: st
 def rechain_preserved_tail(preserved_tail: list[dict], anchor_uuid: str) -> list[dict]:
     """Re-append copies of the preserved-tail lines with parentUuid
     updated to form a fresh chain starting from the summary message
-    (anchor_uuid). Each line keeps its own original uuid -- these are the
+    (anchor_uuid). Each line keeps its own original uuid; these are the
     same logical messages, just re-parented into the new active chain;
     their original (now-orphaned) copies stay untouched earlier in the
     file, matching append-only semantics (nothing in this module ever
@@ -169,8 +169,8 @@ def append_compaction(
 ) -> AppendResult:
     """Appends a compact_boundary + isCompactSummary + re-chained
     preserved-tail sequence to session_path's own JSONL, in the shape the
-    real /compact produces. `summary_text` is the raw (uncleaned) summary
-    -- this wraps it with response.build_resume_preamble itself, matching
+    real /compact produces. `summary_text` is the raw (uncleaned) summary;
+    this wraps it with response.build_resume_preamble itself, matching
     how the real app's Vq wrapper is applied to the raw NBn/rw output, not
     a pre-cleaned string. See the module docstring for what this does and
     does not achieve.
@@ -178,12 +178,12 @@ def append_compaction(
     logical_parent_uuid_override anchors the boundary's logicalParentUuid
     to a specific uuid instead of the file's literal last line. Needed
     when what was actually compacted isn't the whole session up to the
-    file's true end -- e.g. continue_after_clear's pre-/clear span, where
-    the append still physically lands at true EOF (JSONL is append-only)
+    file's true end, e.g. remind-hook's pre-/clear span, where the
+    append still physically lands at true EOF (JSONL is append-only)
     but the boundary must still point at the last line of what it
     actually summarizes, not whatever's been appended to the file since.
     session_metadata (sessionId/cwd/version/...) is still pulled from the
-    file's true last line regardless -- those are file-level facts, not
+    file's true last line regardless; those are file-level facts, not
     tied to which span was summarized."""
     raw_lines = _read_raw_lines(session_path)
     if not raw_lines:
@@ -191,7 +191,7 @@ def append_compaction(
 
     # The raw file's literal last line is often a control-type entry with
     # no uuid at all (e.g. "last-prompt", "mode", "queue-operation",
-    # "atis-latch") -- scan backward for the last line that actually has
+    # "atis-latch"); scan backward for the last line that actually has
     # one, matching a real conversational/system entry, not just take
     # raw_lines[-1] blindly.
     last_line = next((line for line in reversed(raw_lines) if line.get("uuid")), None)

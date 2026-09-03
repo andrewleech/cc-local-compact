@@ -1,7 +1,7 @@
 """Markdown output writer.
 
 Writes a standalone summary file rather than appending to the live session
-.jsonl -- see docs/compact-architecture.md in the cc-patcher repo,
+.jsonl; see docs/compact-architecture.md in the cc-patcher repo,
 "Decision for the first implementation". The metadata block is kept as
 parseable `key: value` lines rather than prose, so a later JSONL-append
 phase can pull the preserved-tail uuids and token counts back out
@@ -40,7 +40,7 @@ class CompactionOutput:
     """Estimate over the FULL original transcript, before any pass."""
     post_tokens_estimate: int
     """Estimate over the FINAL residual (cleaned summary + preserved
-    tail combined) -- the same quantity real Claude Code's own
+    tail combined), the same quantity real Claude Code's own
     compactMetadata.postTokens measures, for direct comparability."""
     custom_instructions: str | None
     summary_text: str

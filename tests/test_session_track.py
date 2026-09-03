@@ -4,13 +4,13 @@ from cc_local_compact import session_track
 
 
 def test_predecessor_session_none_when_never_tracked(tmp_path):
-    # deterministic ppid_of (no real ancestry) -- nothing anywhere is tracked
+    # deterministic ppid_of (no real ancestry); nothing anywhere is tracked
     assert session_track.predecessor_session(1234, "s-new", state_dir=tmp_path, ppid_of=lambda pid: None) is None
 
 
 def test_predecessor_is_current_when_no_new_turn_completed_yet(tmp_path):
     # /clear happened, /remind is called before any turn has completed in
-    # the new session -- record_turn was never called with the new
+    # the new session; record_turn was never called with the new
     # session_id, so `current` still holds the pre-clear session.
     session_track.record_turn(1234, "s-old", "/path/old.jsonl", "/cwd", state_dir=tmp_path)
     predecessor = session_track.predecessor_session(1234, "s-new", state_dir=tmp_path)
@@ -19,7 +19,7 @@ def test_predecessor_is_current_when_no_new_turn_completed_yet(tmp_path):
 
 def test_predecessor_is_previous_after_a_turn_completed_in_the_new_session(tmp_path):
     session_track.record_turn(1234, "s-old", "/path/old.jsonl", "/cwd", state_dir=tmp_path)
-    # a turn completes in the new (post-clear) session -- Stop fires, shifting current->previous
+    # a turn completes in the new (post-clear) session; Stop fires, shifting current->previous
     session_track.record_turn(1234, "s-new", "/path/new.jsonl", "/cwd", state_dir=tmp_path)
     predecessor = session_track.predecessor_session(1234, "s-new", state_dir=tmp_path)
     assert predecessor == {"session_id": "s-old", "transcript_path": "/path/old.jsonl", "cwd": "/cwd"}
@@ -75,7 +75,7 @@ def test_record_turn_skips_write_when_nothing_changed(tmp_path, monkeypatch):
     session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
     assert len(write_calls) == 1  # first-ever write for this pid always happens
 
-    # repeating the exact same turn info -- nothing actually changed
+    # repeating the exact same turn info; nothing actually changed
     session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
     assert len(write_calls) == 1  # no second write
 
@@ -100,7 +100,7 @@ def test_record_turn_writes_when_session_id_changes(tmp_path, monkeypatch):
 
 
 def _fake_ancestry(chain: dict[int, int | None]):
-    """chain: {pid: parent_pid_or_None} -- a fake ppid_of for deterministic tests."""
+    """chain: {pid: parent_pid_or_None}; a fake ppid_of for deterministic tests."""
     return lambda pid: chain.get(pid)
 
 
@@ -111,7 +111,7 @@ def test_find_tracked_pid_returns_start_pid_when_it_already_has_state(tmp_path):
 
 def test_find_tracked_pid_walks_up_to_find_tracked_ancestor(tmp_path):
     # simulates the real observed bug: the hook's own os.getppid() (5000)
-    # has no state, but its grandparent (7000) does -- Stop, running under
+    # has no state, but its grandparent (7000) does; Stop, running under
     # a different (correct) parent resolution, already tracked 7000.
     session_track.record_turn(7000, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
     ppid_of = _fake_ancestry({5000: 6000, 6000: 7000, 7000: 100})
@@ -124,7 +124,7 @@ def test_find_tracked_pid_none_when_no_ancestor_tracked(tmp_path):
 
 
 def test_find_tracked_pid_respects_max_levels(tmp_path):
-    # tracked state exists, but only beyond max_levels -- must not be found
+    # tracked state exists, but only beyond max_levels; must not be found
     session_track.record_turn(9000, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
     long_chain = {i: i + 1 for i in range(1000, 1000 + 15)}
     long_chain[1015] = 9000

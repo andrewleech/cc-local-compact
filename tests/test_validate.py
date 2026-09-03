@@ -37,7 +37,7 @@ Some reasoning about the conversation.
 
 
 # Verbatim (truncated where noted) real failures collected against
-# qwen3.5-9b on this project's own 488K-token benchmark -- see
+# qwen3.5-9b on this project's own 488K-token benchmark; see
 # validate.py's module docstring.
 FAILURE_1_NO_TAGS_TRUNCATED = (
     "I see what happened — the model backend is a summarization-focused "

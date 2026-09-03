@@ -5,11 +5,11 @@ compacted, rather than leaving most of it as an untouched preserved tail.
 Real evidence this is needed, both from this tool and from the built-in
 mechanism it replicates: a genuine Claude Code /compact on a 488K-token
 session compacted it to ~14.8K tokens in one pass, preserving only 4
-messages verbatim -- only possible because that session's own model had a
+messages verbatim; only possible because that session's own model had a
 context window large enough to hold nearly the whole thing in one
 summarization call. A single-pass run of this tool against the same
 session at context_budget=48000 could only summarize the oldest 26 of 138
-groups, preserving the other 112 (~106K tokens) completely untouched --
+groups, preserving the other 112 (~106K tokens) completely untouched,
 not a quality problem, a per-pass input-window problem. The built-in
 mechanism has the identical limitation reactively: its retry loop (ZZ)
 only ever shrinks the *current* summarize batch to fit one model call: it
@@ -18,14 +18,14 @@ has no mechanism to re-process what's already been pushed into
 exhibit the same "small compacted head, mostly-untouched tail" result, not
 genuine end-to-end compaction. There is no known fallback to a larger-
 context model on a context_size failure specifically (see
-docs/compact-architecture.md's unresolved-functions list) -- this module
+docs/compact-architecture.md's unresolved-functions list); this module
 is what closes that gap for a local model with a much smaller window than
 Claude's.
 
 The fix: after each pass, if what's left over (this pass' cleaned summary
 plus its preserved tail) would still be too large to fit as a single
 pass' own input, feed that combined residual back in as the next pass'
-input and run again -- continuing until the residual would fit in one
+input and run again, continuing until the residual would fit in one
 more pass, or nothing further can be compacted.
 """
 
@@ -37,7 +37,7 @@ from .tokens import count_chars_over_n, estimate_group_tokens
 
 
 DEFAULT_MAX_PASSES = 10
-"""Safety cap against runaway iteration -- each pass is a real network
+"""Safety cap against runaway iteration; each pass is a real network
 round-trip taking minutes, so this bounds worst-case wall-clock time, not
 expected behavior. A session needing this many passes to fit inside one
 pass' budget would be a genuinely extreme case, not the common one."""
@@ -54,7 +54,7 @@ class PassRecord:
     post_tokens: int
     used_fallback: bool = False
     """True if this pass' result came from a fallback model rather than
-    the primary -- see fallback.py."""
+    the primary; see fallback.py."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -90,15 +90,13 @@ def _residual_lines(summary_text: str, preserved_tail: list[dict]) -> list[dict]
     an ASSISTANT to resume a live task, which is the wrong implication for
     something being fed back in as input to ANOTHER summarization pass, so
     this plain "here is prior compacted history" framing is used instead
-    on principle. NOTE: this was originally written believing the resume-
-    preamble framing was the specific cause of a real qwen3.5-9b failure
-    on this tool's own 488K-token benchmark -- that turned out to be
-    wrong. The same failure was later reproduced by feeding the exact same
-    raw content through a single standalone call with NO synthetic
-    preamble and NO multi-pass framing at all, proving it's content-
-    specific (dense self-referential/meta-technical material qwen3.5-9b
-    struggled with, not qwen3.8-27b), not something this framing choice
-    fixes. See validate.py and fallback.py for the actual mitigation."""
+    on principle. This choice is unrelated to the qwen3.5-9b failures
+    documented in validate.py/fallback.py: the same failure reproduces
+    even through a single standalone call with no synthetic preamble and
+    no multi-pass framing at all, confirming it's content-specific (dense
+    self-referential/meta-technical material qwen3.5-9b struggles with,
+    not qwen3.8-27b), not a framing artifact. See validate.py and
+    fallback.py for the actual mitigation."""
     cleaned_summary = response.clean_summary(summary_text)
     summary_line = {
         "type": "user",
@@ -123,7 +121,7 @@ def run_multi_pass(
 ) -> MultiPassResult:
     """Chain run_loop passes until the residual (summary + preserved tail)
     would itself fit as a single pass' input, or no further pass can make
-    progress. custom_instructions only apply to the first pass -- later
+    progress. custom_instructions only apply to the first pass; later
     passes are summarizing this tool's own prior output, not fresh
     user-requested content, so repeating them would be misapplied."""
     usable = config.usable_budget()
@@ -139,7 +137,7 @@ def run_multi_pass(
 
         if not result.ok:
             if passes:
-                # A later pass couldn't proceed on the residual -- surface
+                # A later pass couldn't proceed on the residual; surface
                 # what the prior pass already achieved rather than losing it.
                 return MultiPassResult(
                     ok=True, reason="later_pass_failed", detail=result.detail,

@@ -16,10 +16,10 @@ from . import discovery, register, response, session_track, transcript
 # `server` (and the anthropic/fastmcp/authlib stack it pulls in) is
 # imported lazily, only by the subcommands that actually run a
 # compaction (compact, serve, and remind-hook once it's past its
-# fast-fail checks) -- register/unregister/list/remind-hook's common
+# fast-fail checks); register/unregister/list/remind-hook's common
 # "nothing to recover" case have no need for it, and that stack is slow
 # to import and noisy (fastmcp pulls in authlib, which currently emits
-# AuthlibDeprecationWarning on import -- not this project's bug to fix,
+# AuthlibDeprecationWarning on import, not this project's bug to fix,
 # but no reason to pay for it or show it on every /remind invocation
 # that doesn't even reach a real compaction call).
 
@@ -36,16 +36,16 @@ def _import_server():
 def _prompt_for_session(candidates: list[dict]) -> Path | None:
     """Interactively pick one of several ambiguous candidates. Prints the
     picker to stderr (stdout is reserved for the final JSON result) and
-    reads a choice from stdin. Returns None -- caller should exit(1) -- if
+    reads a choice from stdin. Returns None (caller should exit(1)) if
     stdin isn't a terminal (nothing to interact with) or the user cancels."""
-    print(f"{len(candidates)} sessions exist for this project -- pick one:", file=sys.stderr)
+    print(f"{len(candidates)} sessions exist for this project, pick one:", file=sys.stderr)
     for i, candidate in enumerate(candidates, 1):
         when = datetime.fromtimestamp(candidate["mtime"]).strftime("%Y-%m-%d %H:%M")
         print(f"  [{i}] {when}  {candidate['display_name']}", file=sys.stderr)
         print(f"      {candidate['path']}", file=sys.stderr)
     if not sys.stdin.isatty():
         print(
-            "stdin is not a terminal, so this can't prompt for a choice -- "
+            "stdin is not a terminal, so this can't prompt for a choice; "
             "re-run with session_path set to one of the paths above.",
             file=sys.stderr,
         )
@@ -114,22 +114,22 @@ def _cmd_serve(_args: argparse.Namespace) -> None:
 
 
 def _remind_hook_text(payload: dict, pid: int) -> str:
-    """Body of the /remind UserPromptExpansion hook: never raises -- any
+    """Body of the /remind UserPromptExpansion hook: never raises; any
     failure degrades to an explanatory string, since the hook's own
     contract (see _cmd_remind_hook) always emits valid JSON regardless of
     what happens here.
 
     `pid` identifies this window's own claude process (os.getppid() from
-    a hook registered with the `args` form -- see session_track.py's
+    a hook registered with the `args` form; see session_track.py's
     module docstring for why that's a direct, reliable parent, not a
     shell-wrapper indirection). Used to look up the predecessor session
     session_track.py's Stop hook recorded for this exact process, rather
-    than any file-boundary or timing heuristic -- immune to "more than
+    than any file-boundary or timing heuristic, immune to "more than
     one session open on this project" ambiguity, since PID is per-window,
     not per-project.
 
     `payload["command_args"]`, if non-empty, is passed through as
-    custom_instructions -- the same role /compact's own trailing text
+    custom_instructions, the same role /compact's own trailing text
     plays ("/compact focusing on foo"). Confirmed the real
     UserPromptExpansion payload carries this field."""
     session_track.log(f"remind-hook: start ppid={pid} session_id={payload.get('session_id')!r}")
@@ -142,7 +142,7 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
         session_track.log(f"remind-hook: predecessor = {predecessor}")
         if predecessor is None:
             return (
-                "/remind: no predecessor session tracked for this window -- "
+                "/remind: no predecessor session tracked for this window; "
                 "either nothing ran here before the last /clear, or the Stop "
                 "hook (see `cc-local-compact register`) hasn't recorded a turn yet."
             )
@@ -161,17 +161,17 @@ def _remind_hook_text(payload: dict, pid: int) -> str:
         elapsed = time.monotonic() - start
         session_track.log(f"remind-hook: compaction finished in {elapsed:.1f}s ok={result.get('ok')} reason={result.get('reason')}")
         if not result.get("ok"):
-            return f"/remind: couldn't recover a summary -- {result.get('detail') or result.get('reason')}"
+            return f"/remind: couldn't recover a summary: {result.get('detail') or result.get('reason')}"
         return response.build_remind_preamble(result["summary"], transcript_path=str(session_path))
     except Exception as error:
         session_track.log(f"remind-hook: unexpected error: {error!r}")
-        return f"/remind: recovery failed unexpectedly -- {error}"
+        return f"/remind: recovery failed unexpectedly: {error}"
 
 
 def _cmd_remind_hook(_args: argparse.Namespace) -> None:
     """UserPromptExpansion hook body for /remind (installed by `register`).
     Reads the hook's JSON input from stdin, always prints exactly one
-    hookSpecificOutput JSON line and exits 0 -- a malformed/failed
+    hookSpecificOutput JSON line and exits 0; a malformed/failed
     recovery degrades to an explanatory additionalContext, never a crash
     or non-JSON output reaching Claude Code."""
     try:
@@ -192,10 +192,10 @@ def _cmd_remind_hook(_args: argparse.Namespace) -> None:
 def _cmd_track_session(_args: argparse.Namespace) -> None:
     """Body for both the Stop and SessionStart hooks (installed by
     `register`): records "this process's current session", so /remind can
-    later find the exact predecessor session across a /clear -- see
+    later find the exact predecessor session across a /clear; see
     session_track.py's module docstring for why this exists and why PID
     is the correlation key. Registered under both events because Stop
-    alone only updates on a completed turn -- SessionStart (source
+    alone only updates on a completed turn; SessionStart (source
     startup/resume/fork/clear/compact) fires immediately instead, closing
     the gap where `claude -r <session>` is followed by /clear with no
     turn run in between (nothing would ever get tracked for that PID) and
@@ -243,7 +243,7 @@ def main() -> None:
         "--append-jsonl", dest="append_to_jsonl", action="store_true", default=False,
         help=(
             "Also append a compact_boundary sequence to the session's own JSONL, "
-            "matching the real /compact's on-disk shape. Record-consistency only -- "
+            "matching the real /compact's on-disk shape. Record-consistency only; "
             "does not reduce cost on the session's next resumed turn. Avoid on a "
             "session the real Claude Code client currently has open."
         ),
@@ -254,7 +254,7 @@ def main() -> None:
             "Summarize only the span before the session's last /clear command "
             "(since the previous /clear if there was one, else since session "
             "start) instead of the whole transcript. NOTE: this detects an "
-            "in-place /clear marker within a single transcript file -- the "
+            "in-place /clear marker within a single transcript file; the "
             "live /remind hook no longer works this way (Claude Code's /clear "
             "now rotates to a separate session file with no in-file boundary "
             "to find; /remind instead uses session_track.py's per-process "

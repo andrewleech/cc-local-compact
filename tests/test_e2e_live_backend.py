@@ -66,7 +66,7 @@ class LiveBackendE2ETests(unittest.TestCase):
         # A near-impossible budget forces the reactive backoff path. This
         # is also the one live check of which overflow-detection branch
         # actually fires against the real backend (structured Anthropic-
-        # error parse vs the self-estimated-gap fallback) -- see loop.py's
+        # error parse vs the self-estimated-gap fallback); see loop.py's
         # module docstring for the documented deviation this resolves.
         result = server._run_compaction(self.session_path, None, 200, None, None)
         self.assertIn(result.get("reason") if not result["ok"] else "ok", ("ok", "exhausted", "too_few_groups"))

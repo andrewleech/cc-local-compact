@@ -1,5 +1,5 @@
 """Token estimation, ported from Claude Code's Nc/nt/DHe/ljn/th/xh (chunk-
-4scc8rka.js, module 356 of the 2.1.252 build -- see
+4scc8rka.js, module 356 of the 2.1.252 build; see
 docs/compact-architecture.md in the cc-patcher repo for the source).
 
 Not a real tokenizer: chars.length/4 rounded, per text/thinking/tool-use-
@@ -15,7 +15,7 @@ estimating only what comes after with the heuristic above. The source JS
 also excludes a background/utility model (`rd`) and a sentinel short-
 response set (`yce`) from counting as a usage anchor; neither was resolved
 to a concrete value during reverse engineering, so `excluded_model` here
-defaults to no exclusion -- pass a value if a specific model id needs
+defaults to no exclusion; pass a value if a specific model id needs
 excluding.
 """
 
@@ -53,7 +53,7 @@ def estimate_block(block, chars_per_token: int = 4) -> int:
         # (the visible text), never `.signature`. Confirmed against a real
         # extended-thinking session: 117 assistant turns had thinking:""
         # (visible text redacted/summarized away) with a substantial
-        # signature blob -- 518,620 signature chars (~129,655 estimated
+        # signature blob, 518,620 signature chars (~129,655 estimated
         # tokens) completely invisible to the unmodified heuristic across
         # one 488K-token transcript, enough to make a "residual fits"
         # convergence claim in multipass.py meaningfully wrong. The real

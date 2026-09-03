@@ -3,20 +3,20 @@
 The slug algorithm (cwd path with every "/" replaced by "-") is inferred
 from observed real directory names (e.g. ~/.claude/projects/-home-corona-
 mpy-debugpy/ for cwd /home/corona/mpy-debugpy), not confirmed against
-Claude Code's own source -- if a lookup ever comes up empty for a project
+Claude Code's own source; if a lookup ever comes up empty for a project
 that clearly has sessions, treat that as a sign this needs revisiting
 rather than assuming the session doesn't exist.
 
 CLAUDE_CODE_SESSION_ID identifies the caller directly. This reverses an
 earlier finding in this module (docs and the public MCP protocol document
-no such mechanism) -- confirmed wrong by extracting the actual MCP stdio
+no such mechanism), confirmed wrong by extracting the actual MCP stdio
 spawn code from the installed Claude Code binary (2.1.258): every stdio
 MCP server is launched with
 `env:{...inherited,CLAUDE_PROJECT_DIR:mn(),CLAUDE_CODE_SESSION_ID:Q(),CLAUDECODE:"1",...serverEnv}`,
 where `Q()` is the same current-session-id accessor used for prompt
 `${CLAUDE_SESSION_ID}` substitution elsewhere in the app. Neither
 claude-net's nor cc-local-router's patcher providers inject this (grepped
-both, no hits) -- it's stock behaviour, not something layered on by
+both, no hits); it's stock behaviour, not something layered on by
 cc-patcher. `resolve_session` uses it as the primary source; a caller with
 this env var set gets an authoritative path, not a guess, even with
 several sessions open on the same project.
@@ -28,7 +28,7 @@ version that doesn't set it). There is deliberately no mtime-based guess
 in that fallback: picking "most recently modified" silently can pick the
 wrong session whenever more than one exists for the project, and a wrong
 pick is a worse failure mode than making the caller choose. Instead,
-`resolve_session` returns no path and a candidate list -- each entry
+`resolve_session` returns no path and a candidate list; each entry
 carries a human-identifiable `display_name` from `describe_session`, so a
 human (via cli.py's interactive picker) or an agent (via the MCP tool's
 returned candidates) can actually tell the sessions apart well enough to
@@ -54,7 +54,7 @@ _CLEAR_MARKER = "<command-name>/clear</command-name>"
 def resolve_cwd(explicit: Path | None = None) -> Path:
     """Prefer an explicitly-given directory, then CLAUDE_PROJECT_DIR (the
     stable project root Claude Code passes to spawned MCP server
-    subprocesses -- documented in mcp.md), then the process' own cwd as a
+    subprocesses, documented in mcp.md), then the process' own cwd as a
     last resort (right when this tool runs standalone via the CLI, not
     necessarily right for an MCP server subprocess whose own cwd isn't
     guaranteed to match the project root)."""
@@ -83,7 +83,7 @@ def _terminal_width(default: int = 80) -> int:
 
 
 def _visible_text(content) -> str | None:
-    """Text a person actually reads on screen for one message's content --
+    """Text a person actually reads on screen for one message's content;
     "text" content blocks only, never tool_use/tool_result/image/thinking."""
     if isinstance(content, str):
         return content or None
@@ -111,17 +111,17 @@ def describe_session(path: Path) -> dict:
     Returns {"display_name": str, "display_name_source": str}.
 
     Two sources, in priority order, read off the main thread (via
-    transcript.load_transcript, not raw file order -- a rewound/abandoned
+    transcript.load_transcript, not raw file order; a rewound/abandoned
     branch's stale rename or last message must not win over what's
     actually live):
       - "renamed": the last `/rename` command on the thread. Claude Code
         records these as type:"system",subtype:"local_command" lines with
-        the new title in a <command-args> tag -- the title the user
+        the new title in a <command-args> tag, the title the user
         themselves chose for the session, and the most reliable signal
         available short of an explicit session_path.
       - "last_message": failing that, the last visible message on the
         thread (text content blocks only), condensed to one line and
-        truncated to about one terminal row -- what a person would
+        truncated to about one terminal row, what a person would
         actually see on screen at the end of the session.
       - "empty": neither exists (an essentially-empty transcript).
       - "error": the transcript couldn't be read/parsed at all.
@@ -166,13 +166,13 @@ def find_clear_indices(lines: list[dict]) -> list[int]:
     slash-command dispatcher writes ("<command-name>/clear</command-name>
     ..."), immediately followed on the thread by a
     type:"system",subtype:"local_command" line carrying an empty
-    <local-command-stdout></local-command-stdout> reply -- unlike /rename
+    <local-command-stdout></local-command-stdout> reply, unlike /rename
     (_RENAME_RE), which IS itself the system/local_command line, not a
     user line naming the command. /clear does not break the parentUuid
     chain or start a new session file (confirmed against a real transcript
     containing one), so a caller wanting only the span since the most
     recent /clear must use the last two entries here, not just the last
-    one -- see slice_since_last_clear below."""
+    one; see slice_since_last_clear below."""
     indices = []
     for i, line in enumerate(lines):
         if line.get("type") != "user":
@@ -184,7 +184,7 @@ def find_clear_indices(lines: list[dict]) -> list[int]:
 
 
 def slice_since_last_clear(lines: list[dict]) -> tuple[list[dict] | None, str | None]:
-    """(span, None) on success -- the transcript span since the previous
+    """(span, None) on success, the transcript span since the previous
     /clear (or session start, for the first one), i.e. everything before
     the LAST /clear that hasn't already been recovered by an earlier
     call. Not everything before the last /clear: since /clear doesn't
@@ -210,7 +210,7 @@ def slice_since_last_clear(lines: list[dict]) -> tuple[list[dict] | None, str | 
 def list_sessions(cwd: Path, claude_home: Path | None = None) -> list[dict]:
     """Available session transcripts for `cwd`'s project, each with a
     describe_session-derived display_name to tell them apart. Sorted
-    newest-first for display purposes only -- see this module's docstring
+    newest-first for display purposes only; see this module's docstring
     for why that ordering is never used to auto-pick a winner."""
     sessions_dir = project_sessions_dir(cwd, claude_home)
     if not sessions_dir.is_dir():
@@ -235,20 +235,20 @@ def resolve_session(
 ) -> tuple[Path | None, dict]:
     """Resolve which session .jsonl to operate on, with metadata about how
     sure that resolution actually is. Returns (path, meta):
-      - explicit_path given: (path, {"source": "explicit"}) -- no
+      - explicit_path given: (path, {"source": "explicit"}), no
         ambiguity, the caller told us directly.
       - explicit_path omitted, CLAUDE_CODE_SESSION_ID set and its .jsonl
         exists in the resolved project directory: (path, {"source":
         "claude_code_session_id_env", "session_id": ..., "ambiguous":
-        False}) -- not a guess, see this module's docstring.
+        False}), not a guess, see this module's docstring.
       - explicit_path omitted, env var unset/stale, exactly one session
         exists for the project: (path, {"source": "only_candidate",
-        "candidate_count": 1}) -- unambiguous by elimination.
+        "candidate_count": 1}), unambiguous by elimination.
       - explicit_path omitted, env var unset/stale, zero sessions exist:
         (None, {"source": "no_session_found", "candidate_count": 0}).
       - explicit_path omitted, env var unset/stale, more than one session
         exists: (None, {"source": "ambiguous", "candidate_count": N,
-        "candidates": [...]}) -- deliberately refuses to guess (no
+        "candidates": [...]}), deliberately refuses to guess (no
         mtime-based auto-pick); `candidates` is list_sessions' full output
         (path/mtime/size/display_name/display_name_source) so the caller
         can present them for a human or agent to choose from."""

@@ -1,7 +1,7 @@
 """Structural sanity-check on a raw model response, used to gate the
 model-fallback mechanism (fallback.py).
 
-Not a semantic or quality judgment -- a cheap, deterministic check for
+Not a semantic or quality judgment; a cheap, deterministic check for
 "did this response even attempt the shape the prompt asked for." Designed
 directly from four independently-reproduced real failures against
 qwen3.5-9b on self-referential/meta-technical content (a conversation

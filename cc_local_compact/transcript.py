@@ -19,7 +19,7 @@ contain "mode", "permission-mode", "queue-operation", "file-history-snapshot",
 never enter a compaction group.
 
 Note "system" here is the line-level type used for control lines like
-compact_boundary -- distinct from the "api_system" content-block type
+compact_boundary; distinct from the "api_system" content-block type
 tokens.py checks for inside an assistant/user message's own content array.
 """
 

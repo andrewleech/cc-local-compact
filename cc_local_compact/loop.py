@@ -1,5 +1,5 @@
 """Summarize/preserve loop, ported from Claude Code's ZZ/_Ct/$Bn (chunk-
-4scc8rka.js, module 356 of the 2.1.252 build -- see
+4scc8rka.js, module 356 of the 2.1.252 build; see
 docs/compact-architecture.md in the cc-patcher repo, "Adaptive
 summarize/preserve loop").
 
@@ -8,7 +8,7 @@ discovers Claude's much larger limit reactively via live API errors:
 
 - The initial summarize/preserve split is ALWAYS proactively seeded against
   `context_budget` (the real app only does this on its auto-trigger path,
-  when it already has an initialTokenGap estimate) -- a small local model
+  when it already has an initialTokenGap estimate); a small local model
   will hit "prompt too long" far more often than the real app ever does
   against Claude's limit, so skipping the doomed first attempt matters more
   here.
@@ -17,14 +17,14 @@ discovers Claude's much larger limit reactively via live API errors:
 - DEVIATION FROM SOURCE: the real app trusts Anthropic's own structured
   actualTokens/limitTokens error fields to size the backoff step. CONFIRMED
   against the live backend (llama-swap fronting llama.cpp on titan:8080,
-  2026-09-01): it does not emit that shape at all -- it emits its own
+  2026-09-01): it does not emit that shape at all; it emits its own
   {"type": "exceed_context_size_error", "n_prompt_tokens", "n_ctx"} shape,
   which client.py's _classify_error now parses first, ahead of the
   Anthropic-shaped check. That gives an exact token_gap straight from the
   server on every real overflow observed so far, so this module's self-
   computed gap fallback (this module's own chars/4 estimate of the request
   just sent, minus the usable budget, rather than the source's dumb
-  step:1) has not actually been exercised against this backend -- it
+  step:1) has not actually been exercised against this backend; it
   remains in place only for a backend that emits neither known shape.
 """
 
@@ -40,7 +40,7 @@ class LoopConfig:
     context_budget: int
     response_max_tokens: int | None = None
     """Defaults to config._default_response_max_tokens(context_budget) if
-    not given -- a fraction of context_budget, floored, rather than one
+    not given; a fraction of context_budget, floored, rather than one
     small fixed constant. See config.py's RESPONSE_TOKENS_FRACTION/FLOOR
     docstring for why."""
     prompt_overhead_tokens: int = 1200
@@ -71,13 +71,13 @@ class LoopResult:
     detail: str | None = None
     used_fallback: bool = False
     """True if the successful attempt's AttemptResult.used_fallback was
-    set -- see fallback.py. Only meaningful when ok is True."""
+    set; see fallback.py. Only meaningful when ok is True."""
 
 
 SummarizeFn = Callable[[list[dict], "str | None", bool], AttemptResult]
 """(summarize_set, custom_instructions, strip_media) -> AttemptResult.
 Injected so this loop's control flow is fully unit-testable without a
-network call -- see tests/test_loop.py."""
+network call; see tests/test_loop.py."""
 
 
 def _accumulate_backward(per_group_tokens: list[int], upto_exclusive: int, gap: int) -> int:
@@ -85,7 +85,7 @@ def _accumulate_backward(per_group_tokens: list[int], upto_exclusive: int, gap: 
     per-group token estimates, stopping as soon as the accumulation meets
     or exceeds `gap`. Falls back to floor(upto_exclusive/2) if accumulating
     nearly everything still doesn't close the gap. This is a single greedy
-    forward-accumulation pass, not binary search -- each call re-estimates
+    forward-accumulation pass, not binary search; each call re-estimates
     fresh from the latest reported gap."""
     accumulated = 0
     count = 0

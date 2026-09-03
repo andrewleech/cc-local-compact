@@ -37,7 +37,7 @@ def test_clean_summary_handles_truncated_analysis_no_summary_reached():
     raw = "<analysis>\nstill thinking about the primary request when it just stops"
     cleaned = response.clean_summary(raw)
     assert "<analysis>" not in cleaned
-    # no <summary> was ever reached -- nothing left to clean into a body
+    # no <summary> was ever reached; nothing left to clean into a body
     assert cleaned == ""
 
 
@@ -60,7 +60,7 @@ def test_build_resume_preamble_no_follow_up_suppression():
 
 
 def test_build_remind_preamble_tells_model_to_wait_not_act():
-    # deliberately NOT build_resume_preamble's framing -- see this
+    # deliberately NOT build_resume_preamble's framing; see this
     # function's own docstring and cc_local_compact/README.md for why
     # (confirmed live: the "resume directly" wording made a real /remind
     # run launch straight into flashing physical hardware with no human

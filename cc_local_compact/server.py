@@ -31,16 +31,16 @@ def _run_compaction(
     trigger: str = "manual",
     logical_parent_uuid_override: str | None = None,
 ) -> dict:
-    """Shared compaction pipeline for compact_session and
-    continue_after_clear. By default operates on session_path's full
-    transcript (trigger "manual", boundary anchored to the file's literal
-    last line) -- compact_session and the CLI rely on exactly this
-    default and pass none of the three trailing params. `lines`,
-    `trigger`, and `logical_parent_uuid_override` exist solely for
-    continue_after_clear, which compacts only a pre-/clear span rather
-    than the whole file and must anchor any appended boundary to that
-    span's own last line, not the file's true end (see
-    jsonl_append.append_compaction's docstring)."""
+    """Shared compaction pipeline for compact_session and the CLI's
+    remind-hook/--before-last-clear paths. By default operates on
+    session_path's full transcript (trigger "manual", boundary anchored
+    to the file's literal last line); compact_session and plain `compact`
+    rely on exactly this default and pass none of the three trailing
+    params. `lines`, `trigger`, and `logical_parent_uuid_override` exist
+    for callers that compact only a pre-/clear span rather than the whole
+    file and must anchor any appended boundary to that span's own last
+    line, not the file's true end (see jsonl_append.append_compaction's
+    docstring)."""
     cfg = config_mod.load_config()
     resolved_model = model or cfg.model
     resolved_budget = context_budget or cfg.context_budget
@@ -69,7 +69,7 @@ def _run_compaction(
         summarize_fn = fallback.with_fallback(summarize_fn, fallback_summarize_fn)
 
     # By the time _run_compaction runs, session_path is always a definite
-    # choice -- never a guess. compact_session returns early on an
+    # choice, never a guess. compact_session returns early on an
     # "ambiguous" resolution instead of calling this with one (see below);
     # the CLI resolves ambiguity interactively before calling this too.
     resolution_fields = {"session_path": str(session_path), **(resolution_meta or {"source": "explicit"})}
@@ -145,7 +145,7 @@ def _run_compaction(
                 "Boundary appended to the session's own JSONL in the same shape "
                 "the real /compact produces, for on-disk record consistency. "
                 "This does NOT reduce what gets sent to the remote model on the "
-                "next resumed turn -- confirmed an externally-appended boundary "
+                "next resumed turn; confirmed an externally-appended boundary "
                 "is not respected by the client. See jsonl_append.py."
             )
         except Exception as error:
@@ -171,18 +171,18 @@ def compact_session(
     session_path identifies WHICH session gets compacted. If omitted, this
     resolves it from the CLAUDE_CODE_SESSION_ID environment variable that
     Claude Code injects into every stdio MCP server's own environment (see
-    discovery.py's module docstring for how this was confirmed) -- that
+    discovery.py's module docstring for how this was confirmed); that
     identifies the calling session directly, not a guess, even with more
     than one Claude Code window open on the same project. If that env var
     is unset/stale and exactly one session exists for the project, that
     one is used unambiguously by elimination.
 
     If neither applies and more than one session transcript exists for the
-    project, this does NOT guess (no mtime-based fallback) -- it returns
+    project, this does NOT guess (no mtime-based fallback); it returns
     {"ok": false, "reason": "ambiguous_session", "candidates": [...]}
     without compacting anything. Each candidate carries path/mtime/size
     plus a display_name (the session's own `/rename` title if it has one,
-    otherwise a condensed snippet of its last visible message -- see
+    otherwise a condensed snippet of its last visible message, see
     discovery.describe_session) so the candidates can actually be told
     apart; re-call with session_path set to the right one's path. Calling
     list_sessions first gets the same candidate list without attempting a
@@ -190,13 +190,13 @@ def compact_session(
 
     If fallback_model is given, any pass whose response fails a
     structural sanity check (see validate.py) is retried against that
-    model instead -- lets a fast/small primary model handle most passes
+    model instead; lets a fast/small primary model handle most passes
     while a slower/larger model only gets used where actually needed.
 
     If append_to_jsonl is True, also appends a compact_boundary +
     isCompactSummary sequence directly to session_path's own JSONL, in the
     same shape the real /compact produces (see jsonl_append.py). This is
-    for on-disk record consistency only -- confirmed it does NOT reduce
+    for on-disk record consistency only; confirmed it does NOT reduce
     what gets sent to the remote model on the next resumed turn (an
     externally-appended boundary is not respected by the client). Not
     recommended on a session the real Claude Code client currently has
@@ -211,7 +211,7 @@ def compact_session(
                 "reason": "ambiguous_session",
                 "detail": (
                     f"{resolution_meta['candidate_count']} session transcripts exist for this project "
-                    "and none could be identified as the caller automatically -- pick one from "
+                    "and none could be identified as the caller automatically; pick one from "
                     "candidates and re-call with session_path set to its path."
                 ),
                 "candidates": resolution_meta["candidates"],
@@ -240,10 +240,10 @@ def list_sessions(project_cwd: str | None = None) -> list[dict]:
     project directory, or the resolved current one (CLAUDE_PROJECT_DIR if
     set, else this process' own cwd). display_name is the session's own
     `/rename` title if it has one, otherwise a condensed snippet of its
-    last visible message (see discovery.describe_session) -- use it to
+    last visible message (see discovery.describe_session); use it to
     tell candidates apart. Call this before compact_session when more than
-    one session might exist for a project, to pick session_path explicitly
-    -- compact_session refuses to guess when it can't identify the caller
+    one session might exist for a project, to pick session_path explicitly;
+    compact_session refuses to guess when it can't identify the caller
     and more than one candidate exists."""
     cwd = Path(project_cwd) if project_cwd else discovery.resolve_cwd()
     return discovery.list_sessions(cwd)

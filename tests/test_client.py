@@ -45,7 +45,7 @@ def _status_error(body: dict, status_code: int = 400) -> anthropic.APIStatusErro
 
 def test_classify_error_llamaswap_context_overflow():
     # Confirmed shape from the real backend (llama-swap fronting llama.cpp
-    # on titan:8080, observed 2026-09-01) -- see client.py's _classify_error
+    # on titan:8080, observed 2026-09-01); see client.py's _classify_error
     # docstring. Does NOT match Anthropic's own actualTokens/limitTokens
     # error shape.
     body = {
@@ -120,7 +120,7 @@ def test_to_api_messages_sanitizes_tool_reference_inside_tool_result():
     # Real bug, bisected against a live backend (qwen3.5-9b on vLLM):
     # a tool_result's content can contain a Claude-Code-internal
     # "tool_reference" block (e.g. for EnterPlanMode, which has no real
-    # result payload) -- llama.cpp's Anthropic-compat shim tolerates it,
+    # result payload); llama.cpp's Anthropic-compat shim tolerates it,
     # vLLM's rejects the whole request with "Unexpected item type in
     # content." See client.py's STANDARD_CONTENT_BLOCK_TYPES.
     group = [{

@@ -178,7 +178,7 @@ def test_append_compaction_respects_anchor_override(tmp_path):
         session_path=session_path,
         summary_text="<summary>\ntest\n</summary>",
         preserved_tail=[],
-        trigger="continue_after_clear",
+        trigger="remind",
         pre_tokens=10, post_tokens=5, duration_ms=1,
         logical_parent_uuid_override="a1",
     )

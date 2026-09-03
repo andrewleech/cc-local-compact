@@ -114,7 +114,7 @@ def test_remind_hook_text_uses_tracked_predecessor_and_returns_passive_framed_su
 
     text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
     # deliberately NOT build_resume_preamble's "resume directly, don't ask
-    # questions" framing -- confirmed live that wording made a real /remind
+    # questions" framing; confirmed live that wording made a real /remind
     # run launch straight into flashing physical hardware with no human
     # confirmation on the turn that injected it (suppressOriginalPrompt means
     # this text is the ONLY thing the model sees on that turn). See

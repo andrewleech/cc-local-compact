@@ -31,7 +31,7 @@ def test_register_creates_settings_json_with_all_three_hooks(tmp_path):
     assert remind_hook["command"] == EXECUTABLE
     assert remind_hook["args"] == ["remind-hook"]
     assert remind_hook["statusMessage"]  # non-empty (currently inert for this event type, see register.py)
-    assert remind_hook["timeout"] > 600  # must exceed the 600s default -- a real compaction can take longer
+    assert remind_hook["timeout"] > 600  # must exceed the 600s default; a real compaction can take longer
 
     stop_entries = settings["hooks"]["Stop"]
     assert len(stop_entries) == 1
@@ -112,7 +112,7 @@ def test_register_refreshes_stale_status_message_on_already_installed_hook(tmp_p
     current_message = settings["hooks"]["UserPromptExpansion"][0]["hooks"][0]["statusMessage"]
     assert current_message != "old stale message"
     assert current_message == register.HOOK_SPECS[0]["statusMessage"]
-    # still only one hook entry -- updated in place, not duplicated
+    # still only one hook entry; updated in place, not duplicated
     assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
     assert result["hooks_already_present"]["UserPromptExpansion"] is True
 

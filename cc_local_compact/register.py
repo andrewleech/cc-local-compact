@@ -1,12 +1,12 @@
 """Installs/removes the bare `/remind` slash command and its two matching
-hooks into the user's own Claude Code config (not a plugin -- see
+hooks into the user's own Claude Code config (not a plugin; see
 cc_local_compact/README.md, "Recovering after a manual /clear", for why a
 plugin-packaged command can't be invoked bare).
 
 Two hooks, both required:
 - UserPromptExpansion, matched to "remind": runs remind-hook, the actual
   recovery logic (see cli.py/session_track.py).
-- Stop (unmatched -- fires after every completed turn): runs
+- Stop (unmatched, fires after every completed turn): runs
   track-session, which records "this window's current session" so
   remind-hook can find the exact predecessor session across a /clear
   without guessing (see session_track.py's module docstring for why this
@@ -14,13 +14,13 @@ Two hooks, both required:
 
 Both are registered using the `args` form (`command` = the executable's
 own path, `args` = the subcommand) rather than a single shell command
-string -- confirmed live that this spawns the hook as a direct child of
+string; confirmed live that this spawns the hook as a direct child of
 the real `claude` process (no intermediate shell), which is what lets
 os.getppid() inside the hook reliably resolve that process's own stable
 PID. A plain shell `command` string does NOT give this guarantee.
 
 `register`/`unregister` write directly under `claude_home` (defaulting to
-~/.claude), merging into settings.json rather than overwriting it --
+~/.claude), merging into settings.json rather than overwriting it;
 other hooks (e.g. this same user's claude-net PreCompact/PostCompact
 hooks) must survive untouched.
 """
@@ -47,11 +47,11 @@ HOOK_SPECS = [
         # NOTE: confirmed in the binary that statusMessage's live-spinner
         # display is hard-gated to Stop/SubagentStop hook events only (a
         # dedicated filter function checks hookEvent against exactly those
-        # two) -- it's inert for UserPromptExpansion, kept only in case
+        # two); it's inert for UserPromptExpansion, kept only in case
         # Claude Code adds support for it later.
         "statusMessage": (
             "Recovering context from before your last /clear (runs a real "
-            "compaction pass against the local model -- can take several "
+            "compaction pass against the local model, can take several "
             "minutes on a large session)..."
         ),
         # Real compaction runs on a large session have been benchmarked at
@@ -64,14 +64,14 @@ HOOK_SPECS = [
     },
     {"event": "Stop", "matcher": None, "args": ["track-session"]},
     # SessionStart's `source` is one of startup/resume/fork/clear/compact,
-    # firing immediately on each -- unlike Stop, it doesn't wait for a turn
+    # firing immediately on each; unlike Stop, it doesn't wait for a turn
     # to complete. Two real gaps this closes: `claude -r <session>` followed
     # by /clear with no turn run in between (confirmed live: nothing was
     # ever tracked for that PID, so /clear had no `current` to preserve and
     # /remind had nothing to fall back to either); and /clear itself now
     # shifts current->previous the instant it happens, rather than only on
     # whatever turn completes next in the new session. Reuses track-session
-    # unchanged -- SessionStart's payload has the same session_id/
+    # unchanged; SessionStart's payload has the same session_id/
     # transcript_path/cwd fields Stop's does.
     {"event": "SessionStart", "matcher": None, "args": ["track-session"]},
 ]
@@ -84,7 +84,7 @@ def default_claude_home() -> Path:
 def resolve_executable() -> str:
     """Best-effort absolute path to this installation's own console
     script, embedded in the hook command so it works regardless of the
-    hook subprocess's own PATH -- matches this project's existing
+    hook subprocess's own PATH; matches this project's existing
     .mcp.json convention of an absolute interpreter path rather than a
     bare name resolved via PATH at hook-execution time."""
     resolved = Path(sys.argv[0]).resolve()
@@ -94,7 +94,7 @@ def resolve_executable() -> str:
     if which:
         return which
     raise RuntimeError(
-        "could not resolve cc-local-compact's own installed path -- "
+        "could not resolve cc-local-compact's own installed path; "
         "run this via the installed console script, not e.g. `python cli.py`"
     )
 
@@ -140,7 +140,7 @@ def register(claude_home: Path | None = None, executable: str | None = None) -> 
                     new_hook[field] = spec[field]
             matcher_entry["hooks"].append(new_hook)
         else:
-            # re-registering after an upgrade -- refresh any changed
+            # re-registering after an upgrade; refresh any changed
             # optional field on an already-installed hook rather than
             # leaving it stale.
             for field in optional_fields:

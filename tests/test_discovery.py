@@ -83,7 +83,7 @@ def test_resolve_session_uses_claude_code_session_id_env(monkeypatch, tmp_path):
     sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
     sid = "5b070f8b-d177-4d47-984e-8072959500ca"
     (sessions_dir / f"{sid}.jsonl").write_text("{}")
-    # A decoy that's newer would win the old mtime heuristic -- proves the
+    # A decoy that's newer would win the old mtime heuristic; proves the
     # env var path is checked first, not just first when nothing else matches.
     time.sleep(0.01)
     (sessions_dir / "decoy.jsonl").write_text("{}")
@@ -312,7 +312,7 @@ def test_slice_since_last_clear_uses_span_since_previous_clear_not_whole_history
     span, error = discovery.slice_since_last_clear(lines)
     assert error is None
     # +1: includes clear1's own line index in the slice start boundary math,
-    # not clear1's line itself -- span starts right after it
+    # not clear1's line itself; span starts right after it
     assert span == _turn("b")
 
 
