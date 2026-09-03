@@ -88,6 +88,8 @@ The hook's `additionalContext` is wrapped in `response.build_resume_preamble`'s 
 
 `discovery.find_clear_indices`/`discovery.slice_since_last_clear` and the CLI's `compact --before-last-clear` flag are kept, but are no longer part of the live `/remind` path -- they detect the old in-place `/clear` marker shape, still useful for dry-running against an older-style transcript (or if Claude Code's own behavior changes back), not for the current mechanism.
 
+A real compaction pass against the local model can take minutes on a large predecessor session, and the hook blocks the turn while it runs (confirmed: `/remind` is silent from the user's perspective otherwise). `register.py`'s `HOOK_SPECS` sets a `statusMessage` on the `remind-hook` entry -- confirmed in the binary that every hook type's schema supports this field and that it's rendered live as the spinner label while the hook runs (`hook_progress` message, carrying `hookEvent`/`hookName`/`statusMessage`). It's a single static string fixed at registration time, not a channel the hook subprocess can push new values through while it's still executing -- there's no evidence of a live-streaming-progress mechanism for a `command`-type hook, only the one label. `register()` refreshes an already-installed hook's `statusMessage` in place on re-registration (matched by `command`+`args`, not by the message text) if it's changed since the last install, rather than requiring an `unregister`/`register` round trip to pick up a wording update.
+
 ### Installing `/remind`
 
 ```bash

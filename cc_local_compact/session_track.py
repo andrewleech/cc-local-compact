@@ -33,7 +33,11 @@ window's PID is a real, unambiguous OS-level identity, not a guess.
 
 State lives under /tmp (namespaced per uid), not ~/.claude -- it's
 process-lifetime scratch data, not durable configuration; losing it
-across a reboot is fine (there's no process to look it up for).
+across a reboot is fine (there's no process to look it up for). /tmp
+isn't guaranteed to be tmpfs for every user though, so record_turn
+skips writing when the marker wouldn't actually change -- Stop fires
+after every turn, and most of those calls are the same session_id as
+last time.
 """
 
 import json
@@ -61,22 +65,35 @@ def record_turn(
     `previous` always holds the last genuinely different session, not
     just whatever was seen two calls ago. A run of same-session Stop
     calls (the common case: several ordinary turns) only refreshes
-    `current` in place and never touches `previous`."""
+    `current` in place and never touches `previous`.
+
+    Skips the write entirely if the resulting marker is byte-for-byte
+    identical to what's already on disk -- Stop fires after every turn,
+    so most calls within one session would otherwise rewrite this file
+    for no actual change. /tmp isn't guaranteed to be tmpfs for every
+    user, so this isn't free I/O to skip."""
     path = _marker_path(pid, state_dir)
-    marker = {"current": None, "previous": None}
+    existing = {"current": None, "previous": None}
     if path.is_file():
         try:
-            marker = json.loads(path.read_text())
+            existing = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
-            marker = {"current": None, "previous": None}
+            existing = {"current": None, "previous": None}
 
-    current = marker.get("current")
+    current = existing.get("current")
+    previous = existing.get("previous")
     if current is None or current.get("session_id") != session_id:
-        marker["previous"] = current
-    marker["current"] = {"session_id": session_id, "transcript_path": transcript_path, "cwd": cwd}
+        previous = current
+    updated = {
+        "current": {"session_id": session_id, "transcript_path": transcript_path, "cwd": cwd},
+        "previous": previous,
+    }
+
+    if updated == existing:
+        return
 
     tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(marker))
+    tmp_path.write_text(json.dumps(updated))
     tmp_path.replace(path)
 
 

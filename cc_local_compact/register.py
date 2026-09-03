@@ -41,7 +41,14 @@ hooks are enabled; otherwise just continue.
 """
 
 HOOK_SPECS = [
-    {"event": "UserPromptExpansion", "matcher": COMMAND_NAME, "args": ["remind-hook"]},
+    {
+        "event": "UserPromptExpansion", "matcher": COMMAND_NAME, "args": ["remind-hook"],
+        "statusMessage": (
+            "Recovering context from before your last /clear (runs a real "
+            "compaction pass against the local model -- can take several "
+            "minutes on a large session)..."
+        ),
+    },
     {"event": "Stop", "matcher": None, "args": ["track-session"]},
 ]
 
@@ -97,13 +104,20 @@ def register(claude_home: Path | None = None, executable: str | None = None) -> 
             if spec["matcher"] is not None:
                 matcher_entry["matcher"] = spec["matcher"]
             entries.append(matcher_entry)
-        already_present = any(
-            h.get("command") == executable and h.get("args") == spec["args"]
-            for h in matcher_entry["hooks"]
+        existing_hook = next(
+            (h for h in matcher_entry["hooks"] if h.get("command") == executable and h.get("args") == spec["args"]),
+            None,
         )
-        if not already_present:
-            matcher_entry["hooks"].append({"type": "command", "command": executable, "args": spec["args"]})
-        hooks_already_present[spec["event"]] = already_present
+        if existing_hook is None:
+            new_hook = {"type": "command", "command": executable, "args": spec["args"]}
+            if "statusMessage" in spec:
+                new_hook["statusMessage"] = spec["statusMessage"]
+            matcher_entry["hooks"].append(new_hook)
+        elif "statusMessage" in spec and existing_hook.get("statusMessage") != spec["statusMessage"]:
+            # re-registering after an upgrade -- refresh a changed statusMessage
+            # on an already-installed hook rather than leaving it stale.
+            existing_hook["statusMessage"] = spec["statusMessage"]
+        hooks_already_present[spec["event"]] = existing_hook is not None
 
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 

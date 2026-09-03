@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from cc_local_compact import session_track
 
 
@@ -57,3 +59,40 @@ def test_state_dir_is_created_with_restrictive_permissions(tmp_path, monkeypatch
     d = session_track._state_dir()
     assert d.is_dir()
     assert oct(d.stat().st_mode)[-3:] == "700"
+
+
+def test_record_turn_skips_write_when_nothing_changed(tmp_path, monkeypatch):
+    write_calls = []
+    real_write_text = Path.write_text
+
+    def spy_write_text(self, *args, **kwargs):
+        write_calls.append(self)
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy_write_text)
+
+    session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
+    assert len(write_calls) == 1  # first-ever write for this pid always happens
+
+    # repeating the exact same turn info -- nothing actually changed
+    session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
+    assert len(write_calls) == 1  # no second write
+
+    predecessor = session_track.predecessor_session(1234, "s-new", state_dir=tmp_path)
+    assert predecessor["session_id"] == "s-a"
+
+
+def test_record_turn_writes_when_session_id_changes(tmp_path, monkeypatch):
+    write_calls = []
+    real_write_text = Path.write_text
+
+    def spy_write_text(self, *args, **kwargs):
+        write_calls.append(self)
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy_write_text)
+
+    session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)
+    session_track.record_turn(1234, "s-a", "/a.jsonl", "/cwd", state_dir=tmp_path)  # no-op
+    session_track.record_turn(1234, "s-b", "/b.jsonl", "/cwd", state_dir=tmp_path)  # real change
+    assert len(write_calls) == 2

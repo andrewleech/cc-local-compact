@@ -24,7 +24,11 @@ def test_register_creates_settings_json_with_both_hooks(tmp_path):
     upe_entries = settings["hooks"]["UserPromptExpansion"]
     assert len(upe_entries) == 1
     assert upe_entries[0]["matcher"] == "remind"
-    assert upe_entries[0]["hooks"] == [{"type": "command", "command": EXECUTABLE, "args": ["remind-hook"]}]
+    assert len(upe_entries[0]["hooks"]) == 1
+    remind_hook = upe_entries[0]["hooks"][0]
+    assert remind_hook["command"] == EXECUTABLE
+    assert remind_hook["args"] == ["remind-hook"]
+    assert remind_hook["statusMessage"]  # non-empty -- shown in the spinner while the hook runs
 
     stop_entries = settings["hooks"]["Stop"]
     assert len(stop_entries) == 1
@@ -81,6 +85,27 @@ def test_register_is_idempotent(tmp_path):
     assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
     assert len(settings["hooks"]["Stop"][0]["hooks"]) == 1
     assert result["hooks_already_present"] == {"UserPromptExpansion": True, "Stop": True}
+
+
+def test_register_refreshes_stale_status_message_on_already_installed_hook(tmp_path, monkeypatch):
+    home = tmp_path / "claude_home"
+    register.register(home, executable=EXECUTABLE)
+
+    # simulate an older install whose statusMessage predates a HOOK_SPECS change
+    settings_path = home / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["hooks"]["UserPromptExpansion"][0]["hooks"][0]["statusMessage"] = "old stale message"
+    settings_path.write_text(json.dumps(settings))
+
+    result = register.register(home, executable=EXECUTABLE)
+
+    settings = json.loads(settings_path.read_text())
+    current_message = settings["hooks"]["UserPromptExpansion"][0]["hooks"][0]["statusMessage"]
+    assert current_message != "old stale message"
+    assert current_message == register.HOOK_SPECS[0]["statusMessage"]
+    # still only one hook entry -- updated in place, not duplicated
+    assert len(settings["hooks"]["UserPromptExpansion"][0]["hooks"]) == 1
+    assert result["hooks_already_present"]["UserPromptExpansion"] is True
 
 
 def test_unregister_removes_command_file_and_both_hooks(tmp_path):
