@@ -129,6 +129,8 @@ cc-local-compact register                       # installs ~/.claude/commands/re
 
 `register` is idempotent (safe to re-run) and only ever adds to `~/.claude/settings.json`'s `hooks`; existing hooks from anything else (e.g. this same user's `claude-net` `PreCompact`/`PostCompact` hooks) are left untouched. `cc-local-compact unregister` removes only what `register` added. Both accept `--claude-home` to target a different directory (used by this project's own tests, never the real `~/.claude`).
 
+**A running `claude` process only reads `~/.claude/settings.json`'s hooks once, at its own startup.** Running `register` (or `unregister`, or reinstalling a new build with `uv tool install --reinstall`) while a Claude Code session is already open has no effect on that session's hooks until it's genuinely restarted, confirmed live to be the cause of several apparent `/remind` failures during development. `claude -r <session>` starts a new process too (picking up current hooks correctly), but `/clear`/`/fork-session` *within* an already-running process does not, since it's the same process throughout, not a new one.
+
 ## Backend
 
 Talks directly to the local inference backend via the `anthropic` Python SDK with a custom `base_url`; the backend (`llama-swap` on `titan:8080`, serving Qwen3.8/Gemma-4 GGUF models) speaks the Anthropic `/v1/messages` protocol, so grouped transcript messages go through close to verbatim with no lossy translation layer. Does not route through the `cc-local-router` proxy process, though it defaults to reading the same `CLAUDE_NET_PROXY_LOCAL_URL`/`CLAUDE_NET_PROXY_LOCAL_MODEL` environment variables that proxy already uses, so there's one place to keep the backend address in sync.

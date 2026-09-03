@@ -29,7 +29,7 @@ Register as an MCP server via `.mcp.json` (see the example in this repo) to expo
 cc-local-compact register     # one-time: installs the bare /remind command + its hook into ~/.claude
 ```
 
-Then, in any Claude Code session: type `/clear`, then `/remind`. `/remind` is a plain user-level slash command + hook this installs, deliberately not an MCP tool or a plugin (both were tried; see `cc_local_compact/README.md`, "Recovering after a manual `/clear`", for why neither works for this). `cc-local-compact unregister` removes it.
+Then, in any Claude Code session: type `/clear`, then `/remind` (or `/remind <text>` to guide the summary, the same way `/compact <text>` does). `/remind` is a plain user-level slash command + hook this installs, deliberately not an MCP tool or a plugin (both were tried; see `cc_local_compact/README.md`, "Recovering after a manual `/clear`", for why neither works for this). `cc-local-compact unregister` removes it.
 
 ## Documentation
 
