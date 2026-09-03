@@ -2,7 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-from cc_local_compact import cli, client as client_mod, discovery
+from cc_local_compact import cli, client as client_mod, session_track
 from cc_local_compact.client import AttemptResult
 
 
@@ -45,18 +45,6 @@ def _turn(label: str, parent: str | None) -> tuple[list[dict], str]:
     return lines, f"a_{label}"
 
 
-def _clear(uuid_prefix: str, parent: str | None) -> tuple[list[dict], str]:
-    clear_uuid, reply_uuid = f"{uuid_prefix}_clear", f"{uuid_prefix}_reply"
-    lines = [
-        {
-            "type": "user", "uuid": clear_uuid, "parentUuid": parent,
-            "message": {"content": "<command-name>/clear</command-name>\n<command-args></command-args>"},
-        },
-        {"type": "system", "subtype": "local_command", "uuid": reply_uuid, "parentUuid": clear_uuid, "content": "<local-command-stdout></local-command-stdout>"},
-    ]
-    return lines, reply_uuid
-
-
 def _write_transcript(path, lines: list[dict]) -> None:
     path.write_text("".join(json.dumps(line) + "\n" for line in lines))
 
@@ -67,66 +55,57 @@ def _fake_summarize():
     return fake
 
 
-def test_remind_hook_text_no_clear_boundary(tmp_path, monkeypatch):
+def test_remind_hook_text_no_predecessor_tracked(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
+    assert "no predecessor session tracked" in text
+
+
+def test_remind_hook_text_uses_tracked_predecessor_and_returns_resume_framed_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(client_mod, "summarize_group", _fake_summarize())
-    lines, _ = _turn("a1", None)
-    path = tmp_path / "session.jsonl"
-    _write_transcript(path, lines)
-
-    text = cli._remind_hook_text({"transcript_path": str(path)})
-    assert "no /clear command found" in text
-
-
-def test_remind_hook_text_resolves_via_transcript_path_and_returns_resume_framed_summary(tmp_path, monkeypatch):
-    monkeypatch.setattr(client_mod, "summarize_group", _fake_summarize())
-    a1, tail = _turn("a1", None)
-    a2, tail = _turn("a2", tail)
-    clear, tail = _clear("c1", tail)
-    post, tail = _turn("post", tail)
-    path = tmp_path / "session.jsonl"
-    _write_transcript(path, a1 + a2 + clear + post)
-
-    text = cli._remind_hook_text({"transcript_path": str(path)})
-    assert "Continue the conversation from where it left off" in text
-
-
-def test_remind_hook_text_falls_back_to_cwd_discovery_when_transcript_path_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(client_mod, "summarize_group", _fake_summarize())
-    cwd = tmp_path / "project"
-    claude_home = tmp_path / ".claude"  # discovery.resolve_session's own default is Path.home() / ".claude"
-    sessions_dir = claude_home / "projects" / discovery.project_dir_slug(cwd)
-    sessions_dir.mkdir(parents=True)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     a1, tail = _turn("a1", None)
     a2, tail = _turn("a2", tail)
-    clear, tail = _clear("c1", tail)
-    _write_transcript(sessions_dir / "only.jsonl", a1 + a2 + clear)
+    old_path = tmp_path / "old_session.jsonl"
+    _write_transcript(old_path, a1 + a2)
 
-    text = cli._remind_hook_text({"cwd": str(cwd)})
+    session_track.record_turn(9999, "s-old", str(old_path), str(tmp_path))
+
+    text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
     assert "Continue the conversation from where it left off" in text
 
 
-def test_remind_hook_text_no_session_resolvable(tmp_path):
-    empty_cwd = tmp_path / "nowhere"
-    text = cli._remind_hook_text({"cwd": str(empty_cwd)})
-    assert "no session transcript could be resolved" in text
+def test_remind_hook_text_predecessor_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    session_track.record_turn(9999, "s-old", str(tmp_path / "gone.jsonl"), str(tmp_path))
+
+    text = cli._remind_hook_text({"session_id": "s-new"}, pid=9999)
+    assert "no longer exists" in text
 
 
-def test_remind_hook_text_never_raises_on_garbage_payload():
-    text = cli._remind_hook_text({"transcript_path": 12345, "cwd": {"not": "a string"}})
+def test_remind_hook_text_never_raises_on_garbage_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    text = cli._remind_hook_text({"session_id": {"not": "a string"}}, pid=9999)
     assert isinstance(text, str)
+
+    text = cli._remind_hook_text({}, pid=9999)
+    assert isinstance(text, str)
+    assert "no predecessor session tracked" in text
 
 
 def test_cmd_remind_hook_prints_valid_hook_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(client_mod, "summarize_group", _fake_summarize())
+    monkeypatch.setattr("os.getppid", lambda: 4242)
+
     a1, tail = _turn("a1", None)
     a2, tail = _turn("a2", tail)
-    clear, tail = _clear("c1", tail)
-    path = tmp_path / "session.jsonl"
-    _write_transcript(path, a1 + a2 + clear)
+    old_path = tmp_path / "old_session.jsonl"
+    _write_transcript(old_path, a1 + a2)
+    session_track.record_turn(4242, "s-old", str(old_path), str(tmp_path))
 
-    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({"transcript_path": str(path)})))
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({"session_id": "s-new"})))
     cli._cmd_remind_hook(None)
 
     out = json.loads(capsys.readouterr().out)
@@ -135,10 +114,35 @@ def test_cmd_remind_hook_prints_valid_hook_json(tmp_path, monkeypatch, capsys):
     assert "Continue the conversation from where it left off" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_cmd_remind_hook_handles_malformed_stdin_gracefully(monkeypatch, capsys):
+def test_cmd_remind_hook_handles_malformed_stdin_gracefully(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr("os.getppid", lambda: 4242)
     monkeypatch.setattr(sys, "stdin", __import__("io").StringIO("not json at all"))
     cli._cmd_remind_hook(None)
 
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptExpansion"
-    assert "no session transcript could be resolved" in out["hookSpecificOutput"]["additionalContext"]
+    assert "no predecessor session tracked" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_cmd_track_session_records_current_session(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr("os.getppid", lambda: 5555)
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({
+        "session_id": "s-1", "transcript_path": "/some/path.jsonl", "cwd": "/some/cwd",
+        "hook_event_name": "Stop",
+    })))
+
+    cli._cmd_track_session(None)
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {}
+    predecessor = session_track.predecessor_session(5555, "some-other-session")
+    assert predecessor == {"session_id": "s-1", "transcript_path": "/some/path.jsonl", "cwd": "/some/cwd"}
+
+
+def test_cmd_track_session_never_raises_on_malformed_stdin(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO("not json"))
+    cli._cmd_track_session(None)
+    assert json.loads(capsys.readouterr().out) == {}

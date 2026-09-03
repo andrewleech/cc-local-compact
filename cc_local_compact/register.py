@@ -1,7 +1,23 @@
-"""Installs/removes the bare `/remind` slash command and its matching
-UserPromptExpansion hook into the user's own Claude Code config (not a
-plugin -- see cc_local_compact/README.md, "Recovering after a manual
-/clear", for why a plugin-packaged command can't be invoked bare).
+"""Installs/removes the bare `/remind` slash command and its two matching
+hooks into the user's own Claude Code config (not a plugin -- see
+cc_local_compact/README.md, "Recovering after a manual /clear", for why a
+plugin-packaged command can't be invoked bare).
+
+Two hooks, both required:
+- UserPromptExpansion, matched to "remind": runs remind-hook, the actual
+  recovery logic (see cli.py/session_track.py).
+- Stop (unmatched -- fires after every completed turn): runs
+  track-session, which records "this window's current session" so
+  remind-hook can find the exact predecessor session across a /clear
+  without guessing (see session_track.py's module docstring for why this
+  exists).
+
+Both are registered using the `args` form (`command` = the executable's
+own path, `args` = the subcommand) rather than a single shell command
+string -- confirmed live that this spawns the hook as a direct child of
+the real `claude` process (no intermediate shell), which is what lets
+os.getppid() inside the hook reliably resolve that process's own stable
+PID. A plain shell `command` string does NOT give this guarantee.
 
 `register`/`unregister` write directly under `claude_home` (defaulting to
 ~/.claude), merging into settings.json rather than overwriting it --
@@ -23,6 +39,11 @@ No recovery hook ran for this command. If you were expecting a summary of
 your pre-/clear conversation, check `cc-local-compact register` was run and
 hooks are enabled; otherwise just continue.
 """
+
+HOOK_SPECS = [
+    {"event": "UserPromptExpansion", "matcher": COMMAND_NAME, "args": ["remind-hook"]},
+    {"event": "Stop", "matcher": None, "args": ["track-session"]},
+]
 
 
 def default_claude_home() -> Path:
@@ -47,14 +68,16 @@ def resolve_executable() -> str:
     )
 
 
-def _hook_command(executable: str) -> str:
-    return f"{executable} remind-hook"
+def _find_matcher_entry(entries: list[dict], matcher: str | None) -> dict | None:
+    for entry in entries:
+        if entry.get("matcher") == matcher or (matcher is None and "matcher" not in entry):
+            return entry
+    return None
 
 
 def register(claude_home: Path | None = None, executable: str | None = None) -> dict:
     home = claude_home or default_claude_home()
     executable = executable or resolve_executable()
-    command_str = _hook_command(executable)
 
     commands_dir = home / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
@@ -63,29 +86,39 @@ def register(claude_home: Path | None = None, executable: str | None = None) -> 
 
     settings_path = home / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.is_file() else {}
-    entries = settings.setdefault("hooks", {}).setdefault("UserPromptExpansion", [])
-    matcher_entry = next((e for e in entries if e.get("matcher") == COMMAND_NAME), None)
-    if matcher_entry is None:
-        matcher_entry = {"matcher": COMMAND_NAME, "hooks": []}
-        entries.append(matcher_entry)
-    hook_already_present = any(h.get("command") == command_str for h in matcher_entry["hooks"])
-    if not hook_already_present:
-        matcher_entry["hooks"].append({"type": "command", "command": command_str})
+    hooks_root = settings.setdefault("hooks", {})
+
+    hooks_already_present = {}
+    for spec in HOOK_SPECS:
+        entries = hooks_root.setdefault(spec["event"], [])
+        matcher_entry = _find_matcher_entry(entries, spec["matcher"])
+        if matcher_entry is None:
+            matcher_entry = {"hooks": []}
+            if spec["matcher"] is not None:
+                matcher_entry["matcher"] = spec["matcher"]
+            entries.append(matcher_entry)
+        already_present = any(
+            h.get("command") == executable and h.get("args") == spec["args"]
+            for h in matcher_entry["hooks"]
+        )
+        if not already_present:
+            matcher_entry["hooks"].append({"type": "command", "command": executable, "args": spec["args"]})
+        hooks_already_present[spec["event"]] = already_present
+
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
     return {
         "ok": True,
         "command_file": str(command_path),
         "settings_file": str(settings_path),
-        "hook_command": command_str,
-        "hook_already_present": hook_already_present,
+        "executable": executable,
+        "hooks_already_present": hooks_already_present,
     }
 
 
 def unregister(claude_home: Path | None = None, executable: str | None = None) -> dict:
     home = claude_home or default_claude_home()
     executable = executable or resolve_executable()
-    command_str = _hook_command(executable)
 
     command_path = home / "commands" / f"{COMMAND_NAME}.md"
     command_removed = command_path.is_file()
@@ -93,24 +126,32 @@ def unregister(claude_home: Path | None = None, executable: str | None = None) -
         command_path.unlink()
 
     settings_path = home / "settings.json"
-    hook_removed = False
+    hooks_removed = {}
     if settings_path.is_file():
         settings = json.loads(settings_path.read_text())
-        entries = settings.get("hooks", {}).get("UserPromptExpansion", [])
-        for entry in entries:
-            if entry.get("matcher") != COMMAND_NAME:
-                continue
-            before = len(entry.get("hooks", []))
-            entry["hooks"] = [h for h in entry.get("hooks", []) if h.get("command") != command_str]
-            if len(entry["hooks"]) != before:
-                hook_removed = True
-        entries[:] = [e for e in entries if e.get("hooks")]
-        if not entries and "UserPromptExpansion" in settings.get("hooks", {}):
-            del settings["hooks"]["UserPromptExpansion"]
+        hooks_root = settings.get("hooks", {})
+        for spec in HOOK_SPECS:
+            entries = hooks_root.get(spec["event"], [])
+            matcher_entry = _find_matcher_entry(entries, spec["matcher"])
+            removed = False
+            if matcher_entry is not None:
+                before = len(matcher_entry.get("hooks", []))
+                matcher_entry["hooks"] = [
+                    h for h in matcher_entry.get("hooks", [])
+                    if not (h.get("command") == executable and h.get("args") == spec["args"])
+                ]
+                removed = len(matcher_entry["hooks"]) != before
+            hooks_removed[spec["event"]] = removed
+            entries[:] = [e for e in entries if e.get("hooks")]
+            if not entries and spec["event"] in hooks_root:
+                del hooks_root[spec["event"]]
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    else:
+        for spec in HOOK_SPECS:
+            hooks_removed[spec["event"]] = False
 
     return {
         "ok": True,
         "command_file_removed": command_removed,
-        "hook_removed": hook_removed,
+        "hooks_removed": hooks_removed,
     }

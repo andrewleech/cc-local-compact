@@ -5,11 +5,12 @@ register.py and cc_local_compact/README.md, "Recovering after a manual
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import discovery, register, response, transcript
+from . import discovery, register, response, session_track, transcript
 
 # `server` (and the anthropic/fastmcp/authlib stack it pulls in) is
 # imported lazily, only by the subcommands that actually run a
@@ -111,34 +112,37 @@ def _cmd_serve(_args: argparse.Namespace) -> None:
     _import_server().main()
 
 
-def _remind_hook_text(payload: dict) -> str:
+def _remind_hook_text(payload: dict, pid: int) -> str:
     """Body of the /remind UserPromptExpansion hook: never raises -- any
     failure degrades to an explanatory string, since the hook's own
     contract (see _cmd_remind_hook) always emits valid JSON regardless of
-    what happens here."""
-    try:
-        transcript_path = payload.get("transcript_path")
-        session_path = Path(transcript_path) if transcript_path and Path(transcript_path).is_file() else None
-        if session_path is None:
-            cwd = Path(payload["cwd"]) if payload.get("cwd") else discovery.resolve_cwd()
-            session_path, _resolution_meta = discovery.resolve_session(None, cwd)
-        if session_path is None:
-            return "/remind: no session transcript could be resolved -- nothing recovered."
+    what happens here.
 
-        all_lines = transcript.load_transcript(session_path)
-        span, error = discovery.slice_since_last_clear(all_lines)
-        if error == "no_clear_boundary_found":
+    `pid` identifies this window's own claude process (os.getppid() from
+    a hook registered with the `args` form -- see session_track.py's
+    module docstring for why that's a direct, reliable parent, not a
+    shell-wrapper indirection). Used to look up the predecessor session
+    session_track.py's Stop hook recorded for this exact process, rather
+    than any file-boundary or timing heuristic -- immune to "more than
+    one session open on this project" ambiguity, since PID is per-window,
+    not per-project."""
+    try:
+        my_session_id = payload.get("session_id")
+        predecessor = session_track.predecessor_session(pid, my_session_id) if my_session_id else None
+        if predecessor is None:
             return (
-                "/remind: no /clear command found on this session's thread -- "
-                "there's nothing pre-/clear to recover yet."
+                "/remind: no predecessor session tracked for this window -- "
+                "either nothing ran here before the last /clear, or the Stop "
+                "hook (see `cc-local-compact register`) hasn't recorded a turn yet."
             )
-        if error == "empty_pre_clear_span":
-            return "/remind: nothing to recover -- /clear was the first thing since the previous /clear (or session start)."
+
+        session_path = Path(predecessor["transcript_path"])
+        if not session_path.is_file():
+            return f"/remind: predecessor session file no longer exists ({session_path})."
 
         server = _import_server()
         result = server._run_compaction(
-            session_path, None, None, None, None, None, False, None,
-            lines=span, trigger="remind", logical_parent_uuid_override=span[-1].get("uuid"),
+            session_path, None, None, None, None, None, False, None, trigger="remind",
         )
         if not result.get("ok"):
             return f"/remind: couldn't recover a summary -- {result.get('detail') or result.get('reason')}"
@@ -157,7 +161,7 @@ def _cmd_remind_hook(_args: argparse.Namespace) -> None:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
         payload = {}
-    text = _remind_hook_text(payload)
+    text = _remind_hook_text(payload, os.getppid())
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptExpansion",
@@ -165,6 +169,25 @@ def _cmd_remind_hook(_args: argparse.Namespace) -> None:
             "suppressOriginalPrompt": True,
         },
     }))
+
+
+def _cmd_track_session(_args: argparse.Namespace) -> None:
+    """Stop hook body (installed by `register`): records "this process's
+    current session" after every completed turn, so /remind can later
+    find the exact predecessor session across a /clear -- see
+    session_track.py's module docstring for why this exists and why PID
+    is the correlation key. Never raises: a tracking failure should never
+    surface as a visible error on an ordinary turn."""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        session_id = payload.get("session_id")
+        transcript_path = payload.get("transcript_path")
+        cwd = payload.get("cwd")
+        if session_id and transcript_path:
+            session_track.record_turn(os.getppid(), session_id, transcript_path, cwd or "")
+    except Exception:
+        pass
+    print("{}")
 
 
 def _cmd_register(args: argparse.Namespace) -> None:
@@ -202,12 +225,16 @@ def main() -> None:
         help=(
             "Summarize only the span before the session's last /clear command "
             "(since the previous /clear if there was one, else since session "
-            "start) instead of the whole transcript -- exercises the same "
-            "slicing the /remind hook (see `register`) uses, for dry-running "
-            "outside a live session. Fails with reason 'no_clear_boundary_found' "
-            "if the session has no /clear, or 'empty_pre_clear_span' if there's "
-            "nothing in that span. Does not apply /remind's resume-framed "
-            "summary wrapping -- there's no live agent here to read it."
+            "start) instead of the whole transcript. NOTE: this detects an "
+            "in-place /clear marker within a single transcript file -- the "
+            "live /remind hook no longer works this way (Claude Code's /clear "
+            "now rotates to a separate session file with no in-file boundary "
+            "to find; /remind instead uses session_track.py's per-process "
+            "predecessor tracking). This flag is kept for dry-running against "
+            "older-style transcripts where /clear was recorded in place. Fails "
+            "with reason 'no_clear_boundary_found' if the session has no "
+            "in-place /clear marker, or 'empty_pre_clear_span' if there's "
+            "nothing in that span."
         ),
     )
     compact_parser.set_defaults(func=_cmd_compact)
@@ -223,6 +250,11 @@ def main() -> None:
         "remind-hook", help="UserPromptExpansion hook body for /remind (installed by `register`, not run directly)",
     )
     remind_hook_parser.set_defaults(func=_cmd_remind_hook)
+
+    track_session_parser = subparsers.add_parser(
+        "track-session", help="Stop hook body that records this window's current session (installed by `register`, not run directly)",
+    )
+    track_session_parser.set_defaults(func=_cmd_track_session)
 
     register_parser = subparsers.add_parser(
         "register", help="Install the bare /remind command + its UserPromptExpansion hook into ~/.claude",
