@@ -84,9 +84,8 @@ def default_claude_home() -> Path:
 def resolve_executable() -> str:
     """Best-effort absolute path to this installation's own console
     script, embedded in the hook command so it works regardless of the
-    hook subprocess's own PATH; matches this project's existing
-    .mcp.json convention of an absolute interpreter path rather than a
-    bare name resolved via PATH at hook-execution time."""
+    hook subprocess's own PATH, which a bare name resolved at
+    hook-execution time would not."""
     resolved = Path(sys.argv[0]).resolve()
     if resolved.is_file():
         return str(resolved)

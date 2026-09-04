@@ -2,8 +2,8 @@
   "mcpServers": {
     "cc-local-compact": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "cc_local_compact"]
+      "command": "uv",
+      "args": ["run", "cc-local-compact", "serve"]
     }
   }
 }
