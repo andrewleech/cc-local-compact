@@ -51,12 +51,12 @@ That's usually all you need. The rest have sensible defaults:
 | `CC_LOCAL_COMPACT_BASE_URL` | `http://titan:8080` | Where your model server lives |
 | `CC_LOCAL_COMPACT_MODEL` | `qwen3.5-9b` | Which model to ask |
 | `CC_LOCAL_COMPACT_API_KEY` | `local` | Only matters if your server checks it |
-| `CC_LOCAL_COMPACT_CONTEXT_BUDGET` | 75% of the model's real window | How much gets fed to the model per pass |
+| `CC_LOCAL_COMPACT_CONTEXT_BUDGET` | the model's full context window | Size of the window it plans against |
 | `CC_LOCAL_COMPACT_RESPONSE_MAX_TOKENS` | 30% of the budget, minimum 8192 | How long a summary it's allowed to write |
 
-If you already use `cc-local-router`, the `CLAUDE_NET_PROXY_LOCAL_URL` and `CLAUDE_NET_PROXY_LOCAL_MODEL` vars are read as a fallback for the first two, so you only keep the address in one place.
+Those are the only variables it reads. It won't pick up settings from any other tool, so there's nothing to untangle if you're running several against different backends.
 
-Bigger context budgets mean fewer passes and a better summary, but the model needs to actually hold it. The default works it out from the model name where it recognises one, and drops to something conservative where it doesn't.
+The context budget is the window it plans against, not the amount of transcript it sends. It reserves room out of that for the summary the model has to write, plus a margin for its own token estimate being off, and feeds in what's left. The default works the window out from the model name where it recognises one, and drops to a conservative 32k where it doesn't; set it by hand if your server is serving a smaller window than the model nominally supports.
 
 ## Setting up `/remind`
 

@@ -133,7 +133,7 @@ cc-local-compact register                       # installs ~/.claude/commands/re
 
 ## Backend
 
-Talks directly to the local inference backend via the `anthropic` Python SDK with a custom `base_url`; the backend (`llama-swap` on `titan:8080`, serving Qwen3.8/Gemma-4 GGUF models) speaks the Anthropic `/v1/messages` protocol, so grouped transcript messages go through close to verbatim with no lossy translation layer. Does not route through the `cc-local-router` proxy process, though it defaults to reading the same `CLAUDE_NET_PROXY_LOCAL_URL`/`CLAUDE_NET_PROXY_LOCAL_MODEL` environment variables that proxy already uses, so there's one place to keep the backend address in sync.
+Talks directly to the local inference backend via the `anthropic` Python SDK with a custom `base_url`; the backend (`llama-swap` on `titan:8080`, serving Qwen3.8/Gemma-4 GGUF models) speaks the Anthropic `/v1/messages` protocol, so grouped transcript messages go through close to verbatim with no lossy translation layer. Does not route through the `cc-local-router` proxy process, and reads none of its environment either; every setting comes from this project's own `CC_LOCAL_COMPACT_*` variables, since a variable shared with an unrelated tool silently misroutes this one as soon as the two want different backends.
 
 ## Which session gets compacted
 
@@ -150,13 +150,15 @@ Since this env var is undocumented and internal, treat it as liable to change ac
 
 ## Configuration
 
-Environment variables, first non-empty wins per pair:
+Environment variables, one per setting, empty treated as unset:
 
-- `CC_LOCAL_COMPACT_BASE_URL` / `CLAUDE_NET_PROXY_LOCAL_URL` (default `http://titan:8080`)
-- `CC_LOCAL_COMPACT_MODEL` / `CLAUDE_NET_PROXY_LOCAL_MODEL` (default `qwen3.5-9b`)
-- `CC_LOCAL_COMPACT_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (default `local`)
-- `CC_LOCAL_COMPACT_CONTEXT_BUDGET` (default: 75% of the resolved model's real context window, per `config.MODEL_CONTEXT_WINDOWS`; falls back to 75% of 32768 for an unlisted model)
+- `CC_LOCAL_COMPACT_BASE_URL` (default `http://titan:8080`)
+- `CC_LOCAL_COMPACT_MODEL` (default `qwen3.5-9b`)
+- `CC_LOCAL_COMPACT_API_KEY` (default `local`)
+- `CC_LOCAL_COMPACT_CONTEXT_BUDGET` (default: the resolved model's real context window, per `config.MODEL_CONTEXT_WINDOWS`; 32768 for an unlisted model)
 - `CC_LOCAL_COMPACT_RESPONSE_MAX_TOKENS` (default: 30% of the resolved `context_budget`, floored at 8192)
+
+`context_budget` is a window size, not an input allowance. `loop.usable_budget()` is the one place headroom is reserved out of it, subtracting `safety_margin_pct` (10%, covering chars/4 estimation error) and `response_max_tokens` (the summary shares the window with the transcript) before any transcript goes in. Scaling the window down at derivation time as well would reserve for both of those twice and leave a large part of it unusable.
 
 ## File layout
 

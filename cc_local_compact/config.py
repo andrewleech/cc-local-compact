@@ -1,9 +1,10 @@
 """Runtime configuration, resolved from environment variables.
 
-Resolution order for base URL and model deliberately falls back to the
-CLAUDE_NET_PROXY_LOCAL_* vars already used by cc-local-router's proxy: this
-tool never imports or invokes that proxy process, it only reuses the same
-known-good values so there is one place the user keeps them in sync.
+Every setting reads exactly one CC_LOCAL_COMPACT_* variable and otherwise
+takes a compiled-in default. Nothing here reads another project's
+environment: a variable shared with an unrelated tool silently misroutes
+this one the moment the two want different backends, which is not a
+failure any output makes visible.
 """
 
 import dataclasses
@@ -73,19 +74,9 @@ gone. gemma-4-12b/gemma-4-e4b are untested for this latency effect and are
 deliberately left off this set until checked, rather than assumed safe."""
 
 FALLBACK_CONTEXT_WINDOW = 32768
-CONTEXT_BUDGET_FRACTION = 0.75
-"""A single flat context_budget default can't serve every backend model
-well; windows above range from 64k to 262k, 4x apart. Deriving the
-default per resolved model, as a fraction of its real window, gets each
-model close to matching what it can actually do in one pass (real Claude
-Code /compact observed compacting a 488K-token session to ~15K in a single
-pass, only possible because its own model's context comfortably held the
-whole batch) while still leaving margin for the response-token reservation
-and seeding-estimate error. Unknown models fall back to a conservative
-32768 window. This governs per-pass batch size, not a hard ceiling on what
-the tool can handle overall; multipass.py chains passes for sessions too
-large even for this budget. Override with CC_LOCAL_COMPACT_CONTEXT_BUDGET
-to bypass model-based derivation entirely."""
+"""Context window assumed for a model absent from MODEL_CONTEXT_WINDOWS,
+deliberately conservative since guessing high on an unknown model turns
+every pass into a reactive-retry cycle."""
 
 RESPONSE_TOKENS_FRACTION = 0.3
 RESPONSE_TOKENS_FLOOR = 8192
@@ -108,8 +99,22 @@ def _default_response_max_tokens(context_budget: int) -> int:
 
 
 def _default_context_budget(model: str) -> int:
-    window = MODEL_CONTEXT_WINDOWS.get(model, FALLBACK_CONTEXT_WINDOW)
-    return round(window * CONTEXT_BUDGET_FRACTION)
+    """The resolved model's real context window, derived per model rather
+    than as one flat default, since the windows in use range from 64k to
+    262k, 4x apart.
+
+    This is a window size, not an input allowance. loop.usable_budget() is
+    the single place headroom is reserved out of it, taking off
+    safety_margin_pct (for chars/4 estimation error) and
+    response_max_tokens (the summary has to fit the same window the
+    transcript does) before any transcript goes in. Scaling the window
+    down here as well would reserve for those two things twice over and
+    leave a large part of the window permanently unusable.
+
+    Governs per-pass batch size, not a ceiling on total session size;
+    multipass.py chains passes for sessions too large for one. Override
+    with CC_LOCAL_COMPACT_CONTEXT_BUDGET to bypass derivation entirely."""
+    return MODEL_CONTEXT_WINDOWS.get(model, FALLBACK_CONTEXT_WINDOW)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -121,19 +126,13 @@ class Config:
     response_max_tokens: int
 
 
-def _first(*names: str, default: str) -> str:
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return default
+def _env(name: str, default: str) -> str:
+    """Empty and unset are both treated as "not configured"."""
+    return os.environ.get(name) or default
 
 
 def load_config() -> Config:
-    model = _first(
-        "CC_LOCAL_COMPACT_MODEL", "CLAUDE_NET_PROXY_LOCAL_MODEL",
-        default=DEFAULT_MODEL,
-    )
+    model = _env("CC_LOCAL_COMPACT_MODEL", DEFAULT_MODEL)
     context_budget_env = os.environ.get("CC_LOCAL_COMPACT_CONTEXT_BUDGET")
     context_budget = (
         int(context_budget_env) if context_budget_env
@@ -145,15 +144,9 @@ def load_config() -> Config:
         else _default_response_max_tokens(context_budget)
     )
     return Config(
-        base_url=_first(
-            "CC_LOCAL_COMPACT_BASE_URL", "CLAUDE_NET_PROXY_LOCAL_URL",
-            default=DEFAULT_BASE_URL,
-        ),
+        base_url=_env("CC_LOCAL_COMPACT_BASE_URL", DEFAULT_BASE_URL),
         model=model,
-        api_key=_first(
-            "CC_LOCAL_COMPACT_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-            default=DEFAULT_API_KEY,
-        ),
+        api_key=_env("CC_LOCAL_COMPACT_API_KEY", DEFAULT_API_KEY),
         context_budget=context_budget,
         response_max_tokens=response_max_tokens,
     )
